@@ -19,16 +19,6 @@ from groq import RateLimitError
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-from langgraph.checkpoint.memory import MemorySaver
-try:
-    from langgraph.graph import END, START, StateGraph
-except Exception:
-    # Some langgraph versions do not export START/END at module level.
-    # Fall back to attributes on StateGraph if available, or simple string sentinels.
-    from langgraph.graph import StateGraph
-    START = getattr(StateGraph, "START", "START")
-    END = getattr(StateGraph, "END", "END")
-from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
 from database import (
@@ -171,8 +161,8 @@ class InteractionExtraction(BaseModel):
 
 
 class AgentState(TypedDict):
-    messages: Annotated[list[BaseMessage], add_messages]
-    tool_actions: Annotated[list[dict], operator.add]
+    messages: list[BaseMessage]
+    tool_actions: list[dict]
 
 
 def _to_text(content: Any) -> str:
@@ -497,15 +487,45 @@ def _should_continue(state: AgentState) -> str:
     return "end"
 
 
-@lru_cache(maxsize=1)
-def get_compiled_graph():
-    graph = StateGraph(AgentState)
-    graph.add_node("agent", _agent_node)
-    graph.add_node("tools", _tool_node)
-    graph.add_edge(START, "agent")
-    graph.add_conditional_edges("agent", _should_continue, {"tools": "tools", "end": END})
-    graph.add_edge("tools", "agent")
-    return graph.compile(checkpointer=MemorySaver())
+def _orchestrate(messages: list[BaseMessage], session_id: str | None = None, max_cycles: int = 6) -> dict:
+    """
+    Simple orchestrator that alternates between the agent node and tool node
+    until no more tool calls are produced or max_cycles is reached.
+    """
+    state: AgentState = {"messages": messages.copy(), "tool_actions": []}
+    thread_id = session_id or "agent_loop"
+
+    for cycle in range(max_cycles):
+        # Agent turn
+        try:
+            agent_out = _agent_node(state)
+        except Exception as e:
+            logger.error(f"[{thread_id}] Agent invocation failed: {e}")
+            break
+
+        # Append any messages produced by agent
+        new_agent_msgs = agent_out.get("messages", [])
+        if new_agent_msgs:
+            state["messages"].extend(new_agent_msgs)
+
+        # Tool turn: execute if agent produced tool calls
+        try:
+            tool_out = _tool_node(state)
+        except Exception as e:
+            logger.error(f"[{thread_id}] Tool execution failed: {e}")
+            break
+
+        new_tool_msgs = tool_out.get("messages", [])
+        if new_tool_msgs:
+            state["messages"].extend(new_tool_msgs)
+            state["tool_actions"].extend(tool_out.get("tool_actions", []))
+            # continue loop so agent can respond to tool output
+            continue
+
+        # No tool messages produced => finished
+        break
+
+    return {"messages": state["messages"], "tool_actions": state["tool_actions"]}
 
 
 def _extract_final_response(messages: list[BaseMessage]) -> str:
@@ -544,25 +564,19 @@ def run_chat(message: str, session_id: str | None = None) -> dict:
     logger.info(f"[{thread_id}] Chat started: {message[:50]}...")
     
     try:
-        # Invoke graph with model failover
-        graph = get_compiled_graph()
-        result = graph.invoke(
-            {"messages": [HumanMessage(content=message)], "tool_actions": []},
-            config={"configurable": {"thread_id": thread_id}},
-        )
-        
-        messages = result.get("messages", [])
+        orchestrator_result = _orchestrate([HumanMessage(content=message)], session_id=thread_id)
+        messages = orchestrator_result.get("messages", [])
         response_text = _extract_final_response(messages).strip()
-        
+
         if not response_text:
             response_text = "I couldn't generate a reply just now. Please try again in a moment."
-        
+
         logger.info(f"[{thread_id}] Chat completed successfully")
-        
+
         return {
             "session_id": thread_id,
             "response": response_text,
-            "tool_actions": result.get("tool_actions", []),
+            "tool_actions": orchestrator_result.get("tool_actions", []),
             "status": "success",
         }
     

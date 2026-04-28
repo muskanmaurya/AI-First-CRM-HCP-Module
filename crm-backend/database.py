@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dotenv import load_dotenv
 import sys
+import logging
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from typing import Generator
@@ -23,6 +24,25 @@ if not DATABASE_URL:
         file=sys.stderr,
     )
     DATABASE_URL = f"sqlite:///./dev.db"
+else:
+    # Normalize common Postgres URL forms to the SQLAlchemy dialect that
+    # uses psycopg (psycopg3) so SQLAlchemy will import the correct DBAPI.
+    # Examples:
+    #  - postgres://...        -> postgresql+psycopg://...
+    #  - postgresql://...      -> postgresql+psycopg://...
+    # If the URL already specifies a dialect like postgresql+psycopg2://,
+    # leave it as-is.
+    if DATABASE_URL.startswith("postgres://"):
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
+    elif DATABASE_URL.startswith("postgresql://") and not DATABASE_URL.startswith("postgresql+"):
+        DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
+    # Log the resolved URL scheme for debugging (do not log credentials)
+    logger = logging.getLogger(__name__)
+    try:
+        scheme = DATABASE_URL.split("://", 1)[0]
+        logger.info(f"Using database scheme: {scheme}")
+    except Exception:
+        pass
 
 
 class Base(DeclarativeBase):
