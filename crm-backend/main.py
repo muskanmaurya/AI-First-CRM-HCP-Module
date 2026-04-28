@@ -4,13 +4,30 @@ from datetime import date, datetime
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field
 
 from agent import run_chat
 from database import create_interaction, get_all_interactions, get_session, init_db, serialize_interaction
 
 
-app = FastAPI(title="AI-First CRM HCP Module")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="AI-First CRM HCP Module", lifespan=lifespan)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class ChatRequest(BaseModel):
@@ -25,9 +42,7 @@ class ManualLogRequest(BaseModel):
     summary: str = Field(..., min_length=1)
 
 
-@app.on_event("startup")
-def startup() -> None:
-    init_db()
+# init_db is handled by the FastAPI lifespan above
 
 
 def _parse_date(value: date | str) -> date:

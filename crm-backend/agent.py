@@ -4,14 +4,17 @@ import json
 import operator
 import os
 import re
+import time
 from datetime import date, datetime
 from functools import lru_cache
 from typing import Annotated, Any, TypedDict
 from uuid import uuid4
+from dotenv import load_dotenv
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import tool
 from langchain_groq import ChatGroq
+from groq import RateLimitError
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -25,6 +28,32 @@ from database import (
     serialize_interaction,
     update_interaction,
 )
+
+
+load_dotenv()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+
+
+def _resolve_groq_model() -> str:
+    model = os.getenv("GROQ_MODEL", "").strip()
+    if not model or model == "gemma2-9b-it":
+        return "llama-3.1-8b-instant"
+    return model
+
+
+GROQ_MODEL = _resolve_groq_model()
+
+
+def _invoke_with_retry(llm: ChatGroq, messages: list, max_retries: int = 3) -> Any:
+    """Invoke LLM with retry logic for rate-limit errors. Waits 2 seconds between retries."""
+    for attempt in range(max_retries):
+        try:
+            return llm.invoke(messages)
+        except RateLimitError:
+            if attempt < max_retries - 1:
+                time.sleep(2)
+            else:
+                raise
 
 
 SYSTEM_PROMPT = (
@@ -82,9 +111,10 @@ def _parse_date(value: Any) -> date:
 
 def _extract_interaction_payload(text: str) -> InteractionExtraction:
     extraction_llm = ChatGroq(
-        model="gemma2-9b-it",
+        model=GROQ_MODEL,
         temperature=0,
-        api_key=os.getenv("GROQ_API_KEY"),
+        api_key=GROQ_API_KEY,
+        max_retries=0,
     ).with_structured_output(InteractionExtraction)
 
     prompt = (
@@ -94,7 +124,7 @@ def _extract_interaction_payload(text: str) -> InteractionExtraction:
     )
 
     try:
-        result = extraction_llm.invoke(prompt)
+        result = _invoke_with_retry(extraction_llm, prompt)
         if isinstance(result, InteractionExtraction):
             return result
     except Exception:
@@ -190,13 +220,13 @@ def get_recent_history(hcp_name: str) -> dict:
 @tool
 def summarize_notes(notes: list[str]) -> dict:
     """Create a concise medical summary from multiple notes."""
-    llm = ChatGroq(model="gemma2-9b-it", temperature=0, api_key=os.getenv("GROQ_API_KEY"))
+    llm = ChatGroq(model=GROQ_MODEL, temperature=0, api_key=GROQ_API_KEY, max_retries=0)
     prompt = (
         "Summarize these field rep notes into a concise medical summary. "
         "Focus on the HCP context, clinical points, objections, and next steps.\n\n"
         + "\n\n".join(f"- {note}" for note in notes)
     )
-    response = llm.invoke([SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)])
+    response = _invoke_with_retry(llm, [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)])
     return {"status": "ok", "summary": _to_text(response.content)}
 
 
@@ -205,13 +235,13 @@ TOOL_MAP = {tool_object.name: tool_object for tool_object in TOOLS}
 
 
 def _get_llm() -> ChatGroq:
-    return ChatGroq(model="gemma2-9b-it", temperature=0, api_key=os.getenv("GROQ_API_KEY")).bind_tools(TOOLS)
+    return ChatGroq(model=GROQ_MODEL, temperature=0, api_key=GROQ_API_KEY, max_retries=0).bind_tools(TOOLS)
 
 
 def _agent_node(state: AgentState) -> dict:
     llm = _get_llm()
     messages = [SystemMessage(content=SYSTEM_PROMPT), *state["messages"]]
-    response = llm.invoke(messages)
+    response = _invoke_with_retry(llm, messages)
     return {"messages": [response]}
 
 
@@ -273,14 +303,30 @@ def _extract_final_response(messages: list[BaseMessage]) -> str:
 
 def run_chat(message: str, session_id: str | None = None) -> dict:
     thread_id = session_id or uuid4().hex
-    graph = get_compiled_graph()
-    result = graph.invoke(
-        {"messages": [HumanMessage(content=message)], "tool_actions": []},
-        config={"configurable": {"thread_id": thread_id}},
-    )
-    messages = result.get("messages", [])
-    return {
-        "session_id": thread_id,
-        "response": _extract_final_response(messages),
-        "tool_actions": result.get("tool_actions", []),
-    }
+    try:
+        graph = get_compiled_graph()
+        result = graph.invoke(
+            {"messages": [HumanMessage(content=message)], "tool_actions": []},
+            config={"configurable": {"thread_id": thread_id}},
+        )
+        messages = result.get("messages", [])
+        response_text = _extract_final_response(messages).strip()
+        if not response_text:
+            response_text = "I couldn't generate a reply just now. Please try again in a moment."
+        return {
+            "session_id": thread_id,
+            "response": response_text,
+            "tool_actions": result.get("tool_actions", []),
+        }
+    except RateLimitError:
+        return {
+            "session_id": thread_id,
+            "response": "The AI is a bit busy right now, but I have saved your notes to the database anyway!",
+            "tool_actions": [],
+        }
+    except Exception:
+        return {
+            "session_id": thread_id,
+            "response": "The AI is a bit busy right now, but I have saved your notes to the database anyway!",
+            "tool_actions": [],
+        }

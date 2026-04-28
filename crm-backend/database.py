@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+from dotenv import load_dotenv
+import sys
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from typing import Generator
@@ -9,10 +11,15 @@ from sqlalchemy import Date, DateTime, Integer, String, Text, create_engine, fun
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+psycopg2://postgres:postgres@localhost:5432/ai_first_crm",
-)
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    print(
+        "ERROR: DATABASE_URL not set. Please set DATABASE_URL in your .env file.",
+        file=sys.stderr,
+    )
+    raise RuntimeError("DATABASE_URL not set in environment")
 
 
 class Base(DeclarativeBase):
