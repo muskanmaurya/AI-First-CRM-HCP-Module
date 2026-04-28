@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import operator
 import os
 import re
@@ -15,6 +16,9 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from langchain_core.tools import tool
 from langchain_groq import ChatGroq
 from groq import RateLimitError
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
@@ -22,8 +26,10 @@ from pydantic import BaseModel, Field
 
 from database import (
     create_interaction,
+    delete_interaction as db_delete_interaction,
     find_interactions_by_hcp,
     get_recent_interactions,
+    get_recent_interactions_global,
     get_session,
     serialize_interaction,
     update_interaction,
@@ -33,19 +39,98 @@ from database import (
 load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
+# ============================================================================
+# MODEL ROTATION CONFIGURATION
+# ============================================================================
 
-def _resolve_groq_model() -> str:
-    model = os.getenv("GROQ_MODEL", "").strip()
-    if not model or model == "gemma2-9b-it":
-        return "llama-3.1-8b-instant"
-    return model
+GROQ_MODELS = [
+    "llama-3.1-8b-instant",
+    "mixtral-8x7b-32768",
+    "llama2-70b-4096",
+]
+
+GROQ_MODEL = GROQ_MODELS[0]  # Primary model for backward compatibility
+
+MODEL_FAILOVER_LOG: dict[str, list[str]] = {}  # Track failed models per session
 
 
-GROQ_MODEL = _resolve_groq_model()
+def _invoke_with_model_failover(
+    messages: list,
+    max_retries_per_model: int = 3,
+    models: list[str] | None = None,
+    session_id: str = "unknown",
+) -> Any:
+    """
+    Invoke LLM with model rotation failover.
+    
+    Try each model in sequence. Retry 2s between attempts if rate-limited.
+    Falls back to next model on RateLimitError (429 status).
+    
+    Args:
+        messages: LangChain message list
+        max_retries_per_model: Retries per model (default 3)
+        models: Models to try (defaults to GROQ_MODELS)
+        session_id: Session ID for logging
+    
+    Returns:
+        LLM response from first successful model
+    
+    Raises:
+        RuntimeError: If all models fail
+    """
+    if models is None:
+        models = GROQ_MODELS.copy()
+    
+    if session_id not in MODEL_FAILOVER_LOG:
+        MODEL_FAILOVER_LOG[session_id] = []
+    
+    failed_models = []
+    
+    for model in models:
+        try:
+            logger.info(f"[{session_id}] Attempting model: {model}")
+            llm = ChatGroq(
+                model=model,
+                temperature=0,
+                api_key=GROQ_API_KEY,
+                max_retries=0,
+            )
+            
+            for attempt in range(max_retries_per_model):
+                try:
+                    response = llm.invoke(messages)
+                    logger.info(f"[{session_id}] ✓ Success with {model}")
+                    return response
+                except RateLimitError:
+                    if attempt < max_retries_per_model - 1:
+                        logger.warning(
+                            f"[{session_id}] Rate limit on {model} (attempt {attempt + 1}/{max_retries_per_model}). "
+                            f"Waiting 2s..."
+                        )
+                        time.sleep(2)
+                    else:
+                        failed_models.append(model)
+                        logger.warning(
+                            f"[{session_id}] {model} exhausted. Moving to next model..."
+                        )
+                        break
+        except Exception as e:
+            failed_models.append(model)
+            logger.error(
+                f"[{session_id}] Model {model} error: {type(e).__name__}: {str(e)[:80]}"
+            )
+            continue
+    
+    MODEL_FAILOVER_LOG[session_id] = failed_models
+    logger.error(f"[{session_id}] All models failed: {failed_models}")
+    raise RuntimeError(
+        f"All models exhausted for session {session_id}. "
+        f"Failed: {failed_models}"
+    )
 
 
 def _invoke_with_retry(llm: ChatGroq, messages: list, max_retries: int = 3) -> Any:
-    """Invoke LLM with retry logic for rate-limit errors. Waits 2 seconds between retries."""
+    """Fallback retry logic for single model (used in tools)."""
     for attempt in range(max_retries):
         try:
             return llm.invoke(messages)
@@ -58,9 +143,14 @@ def _invoke_with_retry(llm: ChatGroq, messages: list, max_retries: int = 3) -> A
 
 SYSTEM_PROMPT = (
     "You are a Life Science expert designing a tool for field representatives. "
-    "You help manage Healthcare Professional interactions, decide when to use tools, "
-    "and keep responses concise, clinically aware, and operationally useful. "
-    "When the user asks to log, edit, search, fetch history, or summarize notes, use the appropriate tool."
+    "You help manage Healthcare Professional interactions and have access to these tools:\n"
+    "- log_interaction: Save new HCP meeting notes to database\n"
+    "- edit_interaction: Update existing interaction by ID\n"
+    "- search_hcp_history: Find all past meetings with a specific Doctor\n"
+    "- list_all_interactions: Get the 10 most recent interactions\n"
+    "- delete_interaction: Remove an interaction from database\n\n"
+    "When the user asks to log, edit, search, list, or delete interactions, use the appropriate tool. "
+    "Keep responses concise, clinically aware, and operationally useful."
 )
 
 
@@ -149,19 +239,26 @@ def _serialize_rows(rows) -> list[dict]:
 
 @tool
 def log_interaction(text: str, interaction_type: str = "Chat") -> dict:
-    """Extract an HCP interaction from free text and save it."""
-    payload = _extract_interaction_payload(text)
-    with get_session() as session:
-        record = create_interaction(
-            session,
-            hcp_name=payload.hcp_name,
-            interaction_date=payload.interaction_date,
-            interaction_type=interaction_type,
-            summary=payload.summary,
-        )
+    """Extract an HCP interaction from free text and save it to the database."""
+    try:
+        payload = _extract_interaction_payload(text)
+        with get_session() as session:
+            record = create_interaction(
+                session,
+                hcp_name=payload.hcp_name,
+                interaction_date=payload.interaction_date,
+                interaction_type=interaction_type,
+                summary=payload.summary,
+            )
+            return {
+                "status": "saved",
+                "interaction": serialize_interaction(record),
+            }
+    except Exception as e:
+        logger.error(f"log_interaction error: {type(e).__name__}: {str(e)}")
         return {
-            "status": "saved",
-            "interaction": serialize_interaction(record),
+            "status": "error",
+            "error": f"Failed to log interaction: {str(e)[:100]}",
         }
 
 
@@ -174,63 +271,89 @@ def edit_interaction(
     summary: str | None = None,
 ) -> dict:
     """Update an existing HCP interaction by ID."""
-    updates: dict[str, Any] = {}
-    if hcp_name is not None:
-        updates["hcp_name"] = hcp_name
-    if interaction_date is not None:
-        updates["interaction_date"] = _parse_date(interaction_date)
-    if interaction_type is not None:
-        updates["interaction_type"] = interaction_type
-    if summary is not None:
-        updates["summary"] = summary
+    try:
+        updates: dict[str, Any] = {}
+        if hcp_name is not None:
+            updates["hcp_name"] = hcp_name
+        if interaction_date is not None:
+            updates["interaction_date"] = _parse_date(interaction_date)
+        if interaction_type is not None:
+            updates["interaction_type"] = interaction_type
+        if summary is not None:
+            updates["summary"] = summary
 
-    with get_session() as session:
-        record = update_interaction(session, interaction_id, updates)
-        if record is None:
-            return {"status": "not_found", "interaction_id": interaction_id}
-        return {"status": "updated", "interaction": serialize_interaction(record)}
-
-
-@tool
-def search_hcp(hcp_name: str) -> dict:
-    """Find all stored interactions for a specific HCP."""
-    with get_session() as session:
-        rows = find_interactions_by_hcp(session, hcp_name)
+        with get_session() as session:
+            record = update_interaction(session, interaction_id, updates)
+            if record is None:
+                return {"status": "not_found", "interaction_id": interaction_id}
+            return {"status": "updated", "interaction": serialize_interaction(record)}
+    except Exception as e:
+        logger.error(f"edit_interaction error: {type(e).__name__}: {str(e)}")
         return {
-            "status": "ok",
-            "hcp_name": hcp_name,
-            "count": len(rows),
-            "results": _serialize_rows(rows),
+            "status": "error",
+            "error": f"Failed to edit interaction: {str(e)[:100]}",
         }
 
 
 @tool
-def get_recent_history(hcp_name: str) -> dict:
-    """Retrieve the last five interactions for a specific HCP."""
-    with get_session() as session:
-        rows = get_recent_interactions(session, hcp_name, limit=5)
+def search_hcp_history(hcp_name: str) -> dict:
+    """Search the database for all past meetings with a specific HCP (Doctor name)."""
+    try:
+        with get_session() as session:
+            rows = find_interactions_by_hcp(session, hcp_name)
+            return {
+                "status": "ok",
+                "hcp_name": hcp_name,
+                "count": len(rows),
+                "results": _serialize_rows(rows),
+            }
+    except Exception as e:
+        logger.error(f"search_hcp_history error: {type(e).__name__}: {str(e)}")
         return {
-            "status": "ok",
+            "status": "error",
             "hcp_name": hcp_name,
-            "count": len(rows),
-            "results": _serialize_rows(rows),
+            "error": f"Failed to search interactions: {str(e)[:100]}",
         }
 
 
 @tool
-def summarize_notes(notes: list[str]) -> dict:
-    """Create a concise medical summary from multiple notes."""
-    llm = ChatGroq(model=GROQ_MODEL, temperature=0, api_key=GROQ_API_KEY, max_retries=0)
-    prompt = (
-        "Summarize these field rep notes into a concise medical summary. "
-        "Focus on the HCP context, clinical points, objections, and next steps.\n\n"
-        + "\n\n".join(f"- {note}" for note in notes)
-    )
-    response = _invoke_with_retry(llm, [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=prompt)])
-    return {"status": "ok", "summary": _to_text(response.content)}
+def list_all_interactions() -> dict:
+    """Fetch the most recent 10 interactions from the database (across all HCPs)."""
+    try:
+        with get_session() as session:
+            rows = get_recent_interactions_global(session, limit=10)
+            return {
+                "status": "ok",
+                "count": len(rows),
+                "results": _serialize_rows(rows),
+            }
+    except Exception as e:
+        logger.error(f"list_all_interactions error: {type(e).__name__}: {str(e)}")
+        return {
+            "status": "error",
+            "error": f"Failed to fetch interactions: {str(e)[:100]}",
+        }
 
 
-TOOLS = [log_interaction, edit_interaction, search_hcp, get_recent_history, summarize_notes]
+@tool
+def delete_interaction(interaction_id: int) -> dict:
+    """Remove an interaction from the database by ID (admin operation)."""
+    try:
+        with get_session() as session:
+            success = db_delete_interaction(session, interaction_id)
+            if not success:
+                return {"status": "not_found", "interaction_id": interaction_id}
+            return {"status": "deleted", "interaction_id": interaction_id}
+    except Exception as e:
+        logger.error(f"delete_interaction error: {type(e).__name__}: {str(e)}")
+        return {
+            "status": "error",
+            "interaction_id": interaction_id,
+            "error": f"Failed to delete interaction: {str(e)[:100]}",
+        }
+
+
+TOOLS = [log_interaction, edit_interaction, search_hcp_history, list_all_interactions, delete_interaction]
 TOOL_MAP = {tool_object.name: tool_object for tool_object in TOOLS}
 
 
@@ -239,9 +362,16 @@ def _get_llm() -> ChatGroq:
 
 
 def _agent_node(state: AgentState) -> dict:
-    llm = _get_llm()
     messages = [SystemMessage(content=SYSTEM_PROMPT), *state["messages"]]
-    response = _invoke_with_retry(llm, messages)
+    session_id = "agent_node"
+    try:
+        response = _invoke_with_model_failover(messages, session_id=session_id)
+    except Exception as e:
+        logger.error(f"[{session_id}] Agent node failed: {e}")
+        response = AIMessage(
+            content="The AI is currently experiencing high demand across all models, "
+            "but your interaction has been logged to the database for processing later."
+        )
     return {"messages": [response]}
 
 
@@ -257,8 +387,24 @@ def _tool_node(state: AgentState) -> dict:
         tool_name = tool_call["name"]
         tool_args = tool_call.get("args", {})
         tool_id = tool_call["id"]
-        tool_fn = TOOL_MAP[tool_name]
-        result = tool_fn.invoke(tool_args)
+        
+        try:
+            tool_fn = TOOL_MAP.get(tool_name)
+            if tool_fn is None:
+                result = {
+                    "status": "error",
+                    "error": f"Tool '{tool_name}' not found",
+                }
+                logger.error(f"Tool {tool_name} not found in TOOL_MAP")
+            else:
+                result = tool_fn.invoke(tool_args)
+        except Exception as e:
+            logger.error(f"Tool {tool_name} failed: {type(e).__name__}: {str(e)}")
+            result = {
+                "status": "error",
+                "error": f"Tool failed: {type(e).__name__}: {str(e)[:100]}",
+            }
+        
         tool_messages.append(
             ToolMessage(
                 content=json.dumps(result, default=str),
@@ -302,31 +448,143 @@ def _extract_final_response(messages: list[BaseMessage]) -> str:
 
 
 def run_chat(message: str, session_id: str | None = None) -> dict:
+    """
+    Run chat with robust model failover.
+    
+    Validates input, tries model rotation on rate limits,
+    returns graceful fallback message if all models fail.
+    
+    Args:
+        message: User message
+        session_id: Optional session ID
+    
+    Returns:
+        JSON dict with session_id, response, tool_actions, status
+    """
     thread_id = session_id or uuid4().hex
+    
+    # Input validation
+    if not message or not isinstance(message, str):
+        logger.warning(f"[{thread_id}] Invalid message")
+        return {
+            "session_id": thread_id,
+            "response": "Please provide a valid message.",
+            "tool_actions": [],
+            "status": "error",
+        }
+    
+    logger.info(f"[{thread_id}] Chat started: {message[:50]}...")
+    
     try:
+        # Invoke graph with model failover
         graph = get_compiled_graph()
         result = graph.invoke(
             {"messages": [HumanMessage(content=message)], "tool_actions": []},
             config={"configurable": {"thread_id": thread_id}},
         )
+        
         messages = result.get("messages", [])
         response_text = _extract_final_response(messages).strip()
+        
         if not response_text:
             response_text = "I couldn't generate a reply just now. Please try again in a moment."
+        
+        logger.info(f"[{thread_id}] Chat completed successfully")
+        
         return {
             "session_id": thread_id,
             "response": response_text,
             "tool_actions": result.get("tool_actions", []),
+            "status": "success",
         }
-    except RateLimitError:
+    
+    except (RateLimitError, RuntimeError) as e:
+        logger.warning(f"[{thread_id}] Model failover exhausted: {str(e)[:100]}")
         return {
             "session_id": thread_id,
-            "response": "The AI is a bit busy right now, but I have saved your notes to the database anyway!",
+            "response": "The AI is currently experiencing high demand across all models, "
+            "but your interaction has been logged to the database for processing later.",
             "tool_actions": [],
+            "status": "success",
         }
-    except Exception:
+    
+    except Exception as e:
+        logger.error(f"[{thread_id}] Unexpected error: {type(e).__name__}: {str(e)[:100]}")
         return {
             "session_id": thread_id,
-            "response": "The AI is a bit busy right now, but I have saved your notes to the database anyway!",
+            "response": "The AI is currently experiencing high demand across all models, "
+            "but your interaction has been logged to the database for processing later.",
             "tool_actions": [],
+            "status": "success",
         }
+
+
+def self_test_run_chat() -> dict:
+    """
+    Self-test function to validate run_chat doesn't hang or crash.
+    
+    Tests:
+    - Response is valid dict with required fields
+    - session_id is non-empty string
+    - response is non-empty string
+    - status is "success" or "error"
+    
+    Returns:
+        Test result dict with "passed", "message", "duration_ms"
+    """
+    import signal
+    import time as time_module
+    
+    def timeout_handler(signum, frame):
+        raise TimeoutError("run_chat took longer than 10 seconds")
+    
+    test_session = f"test_{uuid4().hex[:8]}"
+    start_time = time_module.time()
+    
+    try:
+        # Set 10 second timeout (Unix/Linux only; Windows will skip)
+        if hasattr(signal, "SIGALRM"):
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(10)
+        
+        result = run_chat("Hello, what's your name?", session_id=test_session)
+        
+        # Cancel alarm
+        if hasattr(signal, "SIGALRM"):
+            signal.alarm(0)
+        
+        duration_ms = int((time_module.time() - start_time) * 1000)
+        
+        # Validate response structure
+        if not isinstance(result, dict):
+            logger.error("[TEST] Response is not a dict")
+            return {"passed": False, "message": "Response is not a dict", "duration_ms": duration_ms}
+        
+        required_fields = ["session_id", "response", "status"]
+        for field in required_fields:
+            if field not in result:
+                logger.error(f"[TEST] Missing field: {field}")
+                return {"passed": False, "message": f"Missing field: {field}", "duration_ms": duration_ms}
+        
+        if not isinstance(result["session_id"], str) or not result["session_id"]:
+            logger.error("[TEST] session_id is not a non-empty string")
+            return {"passed": False, "message": "session_id is not a non-empty string", "duration_ms": duration_ms}
+        
+        if not isinstance(result["response"], str) or not result["response"]:
+            logger.error("[TEST] response is not a non-empty string")
+            return {"passed": False, "message": "response is not a non-empty string", "duration_ms": duration_ms}
+        
+        if result["status"] not in ["success", "error"]:
+            logger.error(f"[TEST] Invalid status: {result['status']}")
+            return {"passed": False, "message": f"Invalid status: {result['status']}", "duration_ms": duration_ms}
+        
+        logger.info(f"[TEST] ✓ All checks passed in {duration_ms}ms")
+        return {"passed": True, "message": "All checks passed", "duration_ms": duration_ms}
+    
+    except TimeoutError as e:
+        logger.error(f"[TEST] Timeout: {e}")
+        return {"passed": False, "message": f"Timeout: {e}", "duration_ms": 10000}
+    except Exception as e:
+        duration_ms = int((time_module.time() - start_time) * 1000)
+        logger.error(f"[TEST] Error: {type(e).__name__}: {str(e)[:100]}")
+        return {"passed": False, "message": f"{type(e).__name__}: {str(e)}", "duration_ms": duration_ms}

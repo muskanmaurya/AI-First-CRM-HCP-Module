@@ -152,3 +152,24 @@ def get_all_interactions(session, hcp_name: str) -> list[HCPInteraction]:
         .order_by(HCPInteraction.timestamp.desc())
         .all()
     )
+
+
+def get_recent_interactions_global(session, limit: int = 10) -> list[HCPInteraction]:
+    """Get the most recent N interactions from the database (all HCPs)."""
+    return (
+        session.query(HCPInteraction)
+        .order_by(HCPInteraction.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
+
+
+def delete_interaction(session, interaction_id: int) -> bool:
+    """Delete an interaction by ID. Returns True if deleted, False if not found."""
+    interaction = session.get(HCPInteraction, interaction_id)
+    if interaction is None:
+        return False
+    
+    session.delete(interaction)
+    session.flush()
+    return True
