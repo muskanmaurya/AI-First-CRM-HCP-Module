@@ -9,7 +9,18 @@ from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field
 
 from agent import run_chat
-from database import create_interaction, get_all_interactions, get_session, init_db, serialize_interaction
+from database import (
+    create_interaction,
+    get_all_interactions,
+    get_session,
+    init_db,
+    serialize_interaction,
+    create_chat_session,
+    get_all_sessions,
+    create_chat_message,
+    get_messages_for_session,
+)
+from database import ChatSession
 
 
 @asynccontextmanager
@@ -61,7 +72,77 @@ def _parse_date(value: date | str) -> date:
 
 @app.post("/chat")
 def chat(payload: ChatRequest) -> dict[str, Any]:
-    return run_chat(payload.message, payload.session_id)
+    # ensure session exists (create when missing)
+    session_id = payload.session_id
+    with get_session() as db:
+        if not session_id:
+            # create a new session with a generic title
+            import uuid
+
+            session_id = uuid.uuid4().hex
+            # generate a better title from the first user message
+            def _generate_title_from_message(msg: str) -> str:
+                import re
+
+                # Try to find patterns like 'Dr. Name' or 'Doctor Name'
+                m = re.search(r"(?:Dr\.?|Doctor)\s+([A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+)*)", msg)
+                if m:
+                    name = m.group(1).strip()
+                    return f"Meeting with Dr. {name}"
+
+                # fallback: first 5 words
+                words = msg.strip().split()
+                title = " ".join(words[:5])
+                return f"Chat: {title}" if title else f"Chat {session_id[:8]}"
+
+            title = _generate_title_from_message(payload.message or "")
+            create_chat_session(db, session_id=session_id, title=title)
+
+        # save user message
+        create_chat_message(db, session_id=session_id, role="user", content=payload.message)
+
+    # call the agent
+    result = run_chat(payload.message, session_id)
+
+    # save assistant response
+    assistant_text = result.get("response", "")
+    with get_session() as db:
+        create_chat_message(db, session_id=session_id, role="assistant", content=assistant_text)
+
+    return {"session_id": session_id, **result}
+
+
+@app.post("/sessions")
+def create_session(payload: dict) -> dict[str, Any]:
+    # Accepts optional session_id and title
+    session_id = payload.get("session_id")
+    title = payload.get("title") or "New Chat"
+    if not session_id:
+        import uuid
+
+        session_id = uuid.uuid4().hex
+
+    with get_session() as db:
+        # create only if not exists
+        existing = db.get(ChatSession, session_id)
+        if existing is None:
+            create_chat_session(db, session_id=session_id, title=title)
+
+    return {"status": "created", "session_id": session_id, "title": title}
+
+
+@app.get("/sessions")
+def list_sessions() -> dict[str, Any]:
+    with get_session() as db:
+        sessions = get_all_sessions(db)
+        return {"sessions": [{"id": s.id, "title": s.title, "created_at": s.created_at.isoformat()} for s in sessions]}
+
+
+@app.get("/sessions/{session_id}/messages")
+def get_session_messages(session_id: str) -> dict[str, Any]:
+    with get_session() as db:
+        messages = get_messages_for_session(db, session_id)
+        return {"messages": [{"id": m.id, "role": m.role, "content": m.content, "timestamp": m.timestamp.isoformat()} for m in messages]}
 
 
 @app.post("/manual-log")

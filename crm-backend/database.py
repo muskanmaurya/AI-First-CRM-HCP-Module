@@ -46,6 +46,29 @@ class HCPInteraction(Base):
     )
 
 
+class ChatSession(Base):
+    __tablename__ = "chat_sessions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), server_default=func.now()
+    )
+
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    role: Mapped[str] = mapped_column(String(32), nullable=False)  # user, assistant, tool
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc), server_default=func.now()
+    )
+
+
+
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
 
@@ -72,6 +95,35 @@ def serialize_interaction(interaction: HCPInteraction) -> dict:
         "summary": interaction.summary,
         "timestamp": interaction.timestamp.isoformat() if interaction.timestamp else None,
     }
+
+
+def create_chat_session(session, session_id: str, title: str) -> ChatSession:
+    sess = ChatSession(id=session_id, title=title)
+    session.add(sess)
+    session.flush()
+    session.refresh(sess)
+    return sess
+
+
+def get_all_sessions(session) -> list[ChatSession]:
+    return session.query(ChatSession).order_by(ChatSession.created_at.desc()).all()
+
+
+def create_chat_message(session, session_id: str, role: str, content: str) -> ChatMessage:
+    msg = ChatMessage(session_id=session_id, role=role, content=content)
+    session.add(msg)
+    session.flush()
+    session.refresh(msg)
+    return msg
+
+
+def get_messages_for_session(session, session_id: str) -> list[ChatMessage]:
+    return (
+        session.query(ChatMessage)
+        .filter(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.timestamp.asc())
+        .all()
+    )
 
 
 def create_interaction(

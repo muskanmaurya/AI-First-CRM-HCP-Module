@@ -146,10 +146,13 @@ SYSTEM_PROMPT = (
     "You help manage Healthcare Professional interactions and have access to these tools:\n"
     "- log_interaction: Save new HCP meeting notes to database\n"
     "- edit_interaction: Update existing interaction by ID\n"
-    "- search_hcp_history: Find all past meetings with a specific Doctor\n"
+    "- search_hcp_history: Find all past meetings with a specific Doctor (pass the doctor name directly if mentioned)\n"
     "- list_all_interactions: Get the 10 most recent interactions\n"
     "- delete_interaction: Remove an interaction from database\n\n"
-    "When the user asks to log, edit, search, list, or delete interactions, use the appropriate tool. "
+    "IMPORTANT: If the user mentions a doctor's name (e.g., 'Dr. Sharma', 'Dr Verma', 'Dr. Alice Johnson'), "
+    "ALWAYS extract that name and use it directly with search_hcp_history. Do NOT ask the user for the name again. "
+    "The search_hcp_history tool requires the hcp_name parameter to be the full doctor name as mentioned.\n\n"
+    "When the user asks to log, edit, search, list, or delete interactions, use the appropriate tool immediately. "
     "Keep responses concise, clinically aware, and operationally useful."
 )
 
@@ -233,6 +236,28 @@ def _extract_interaction_payload(text: str) -> InteractionExtraction:
     return InteractionExtraction(hcp_name=name, interaction_date=parsed_date, summary=summary)
 
 
+def _extract_doctor_name_from_text(text: str) -> str | None:
+    """
+    Extract doctor name from text using regex patterns.
+    Looks for patterns like 'Dr. Name', 'Dr Name', 'Doctor Name'.
+    Returns the extracted name or None if not found.
+    """
+    # Match patterns: Dr. Name, Dr Name, Doctor Name
+    patterns = [
+        r"(?:Dr\.?|Doctor)\s+([A-Z][A-Za-z.'-]+(?:\s+[A-Z][A-Za-z.'-]+)*)",
+        r"([A-Z][a-z]+)\s+([A-Z][a-z]+)",  # Fallback: First Last (capitalized)
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            # For first pattern, return group 1; for second, return groups 1 + 2
+            if len(match.groups()) > 1:
+                return f"{match.group(1)} {match.group(2)}"
+            else:
+                return match.group(1).strip()
+    return None
+
+
 def _serialize_rows(rows) -> list[dict]:
     return [serialize_interaction(row) for row in rows]
 
@@ -297,7 +322,20 @@ def edit_interaction(
 
 @tool
 def search_hcp_history(hcp_name: str) -> dict:
-    """Search the database for all past meetings with a specific HCP (Doctor name)."""
+    """
+    Search the database for all past meetings with a specific Healthcare Professional.
+    
+    This tool queries the database to find all interactions with a given doctor.
+    
+    Args:
+        hcp_name: The name of the doctor to search for. This should be extracted directly 
+                  from the user's message if they mention a doctor (e.g., 'Dr. Sharma', 
+                  'Dr Verma', 'Dr. Alice Johnson'). Do not ask for clarification if a name 
+                  is mentioned—use it directly.
+    
+    Returns:
+        A dictionary containing status, hcp_name, count of meetings, and detailed results.
+    """
     try:
         with get_session() as session:
             rows = find_interactions_by_hcp(session, hcp_name)
@@ -362,8 +400,31 @@ def _get_llm() -> ChatGroq:
 
 
 def _agent_node(state: AgentState) -> dict:
+    # Build messages with system prompt
     messages = [SystemMessage(content=SYSTEM_PROMPT), *state["messages"]]
     session_id = "agent_node"
+    
+    # Extract doctor name from user's latest message and provide context
+    if state["messages"]:
+        last_user_msg = None
+        for msg in reversed(state["messages"]):
+            if isinstance(msg, HumanMessage):
+                last_user_msg = msg.content
+                break
+        
+        if last_user_msg and isinstance(last_user_msg, str):
+            extracted_name = _extract_doctor_name_from_text(last_user_msg)
+            if extracted_name:
+                # Insert a helpful system note before the user message to guide the agent
+                context_msg = SystemMessage(
+                    content=f"Note: The user mentioned a doctor named '{extracted_name}'. "
+                    f"Use this name directly with search_hcp_history to find their past meetings. "
+                    f"Do NOT ask the user for the doctor's name."
+                )
+                # Insert after the main system prompt
+                messages.insert(1, context_msg)
+                logger.info(f"[{session_id}] Extracted doctor name: {extracted_name}")
+    
     try:
         response = _invoke_with_model_failover(messages, session_id=session_id)
     except Exception as e:
