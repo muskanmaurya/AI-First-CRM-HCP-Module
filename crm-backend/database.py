@@ -15,11 +15,14 @@ load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
+    # For robustness during deploy or local development when DATABASE_URL
+    # isn't provided, fall back to a local SQLite file and log a warning.
+    # Production deployments should set DATABASE_URL to a managed Postgres instance.
     print(
-        "ERROR: DATABASE_URL not set. Please set DATABASE_URL in your .env file.",
+        "WARNING: DATABASE_URL not set. Falling back to local SQLite 'dev.db'.",
         file=sys.stderr,
     )
-    raise RuntimeError("DATABASE_URL not set in environment")
+    DATABASE_URL = f"sqlite:///./dev.db"
 
 
 class Base(DeclarativeBase):
