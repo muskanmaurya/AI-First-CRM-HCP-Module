@@ -20,7 +20,14 @@ from groq import RateLimitError
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import END, START, StateGraph
+try:
+    from langgraph.graph import END, START, StateGraph
+except Exception:
+    # Some langgraph versions do not export START/END at module level.
+    # Fall back to attributes on StateGraph if available, or simple string sentinels.
+    from langgraph.graph import StateGraph
+    START = getattr(StateGraph, "START", "START")
+    END = getattr(StateGraph, "END", "END")
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 
