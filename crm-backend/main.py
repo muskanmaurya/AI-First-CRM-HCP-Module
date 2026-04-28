@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import os
 from datetime import date, datetime
 from typing import Any
 
@@ -7,6 +9,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import OperationalError
 
 from agent import run_chat
 from database import (
@@ -23,9 +26,22 @@ from database import (
 from database import ChatSession
 
 
+logger = logging.getLogger(__name__)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    init_db()
+    if os.getenv("SKIP_DB_INIT_ON_STARTUP", "false").lower() == "true":
+        logger.warning("Skipping init_db() on startup because SKIP_DB_INIT_ON_STARTUP=true")
+        yield
+        return
+
+    try:
+        init_db()
+    except OperationalError:
+        logger.exception("Database initialization failed; starting app without eager schema creation.")
+    except Exception:
+        logger.exception("Unexpected database initialization error; continuing startup.")
     yield
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from dotenv import load_dotenv
 import sys
 import logging
@@ -36,6 +37,19 @@ else:
         DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
     elif DATABASE_URL.startswith("postgresql://") and not DATABASE_URL.startswith("postgresql+"):
         DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
+    if DATABASE_URL.startswith("postgresql+psycopg://") and "sslmode=" not in DATABASE_URL:
+        parts = urlsplit(DATABASE_URL)
+        query_params = dict(parse_qsl(parts.query, keep_blank_values=True))
+        query_params["sslmode"] = "require"
+        DATABASE_URL = urlunsplit(
+            (
+                parts.scheme,
+                parts.netloc,
+                parts.path,
+                urlencode(query_params),
+                parts.fragment,
+            )
+        )
     # Log the resolved URL scheme for debugging (do not log credentials)
     logger = logging.getLogger(__name__)
     try:
