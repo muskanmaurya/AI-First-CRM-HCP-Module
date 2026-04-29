@@ -275,10 +275,21 @@ const interactionSlice = createSlice({
 				const sessionId = action.payload.session_id ?? action.payload.sessionId ?? null
 				if (sessionId) {
 					state.currentSessionId = sessionId
-					const assistant = action.payload.response ?? ''
+					// Prefer explicit response text; fallback to structured_response.text
 					const structuredResponse = action.payload.structured_response ?? null
+					const assistant = (action.payload.response && String(action.payload.response).trim()) || (structuredResponse?.text && String(structuredResponse.text).trim()) || ''
 					state.messages.push({ role: 'user', content: action.meta.arg.message })
 					state.messages.push({ role: 'assistant', content: assistant, structured_response: structuredResponse })
+
+					// Apply structured form updates immediately to local draft (so UI updates even if chat rendering fails)
+					if (structuredResponse?.form_updates && typeof structuredResponse.form_updates === 'object') {
+						const updates = normalizeIncomingAiUpdates(structuredResponse.form_updates)
+						Object.entries(updates).forEach(([field, value]) => {
+							if (!Object.prototype.hasOwnProperty.call(state.formDraft, field)) return
+							state.formDraft[field] = value
+							state.aiHighlightedFields[field] = Date.now()
+						})
+					}
 				}
 			})
 			.addCase(postChatMessage.rejected, (state) => {

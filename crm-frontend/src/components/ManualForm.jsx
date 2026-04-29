@@ -286,13 +286,16 @@ const ManualForm = () => {
                         </div>
                     ) : (
                         <div className="space-y-4">
-                            {messages.map((message, index) => (
-                                <div key={`${message.role}-${index}`} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                                    <div className={`max-w-xl rounded-2xl border px-4 py-3 text-sm leading-relaxed shadow-sm ${message.role === 'user' ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 bg-slate-50 text-slate-800'}`}>
-                                        {message.content}
-                                    </div>
-                                </div>
-                            ))}
+							{messages.map((message, index) => (
+								<div key={`${message.role}-${index}`} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+									<div className={`max-w-xl rounded-2xl border px-4 py-3 text-sm leading-relaxed shadow-sm ${message.role === 'user' ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 bg-slate-50 text-slate-800'}`}>
+										{message.content}
+										{message.structured_response?.form_updates && (
+											<div className="mt-2 inline-block rounded-full bg-blue-50 border border-blue-100 px-2 py-1 text-xs text-blue-600">AI pre-filled form</div>
+										)}
+									</div>
+								</div>
+							))}
 								{chatLoading && (
                                 <div className="flex justify-start">
                                     <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 shadow-sm">
