@@ -5,37 +5,31 @@ import { store } from './store/store'
 import ManualForm from './components/ManualForm'
 
 const AppStatePatchBridge = () => {
-  const dispatch = useDispatch()
-  const messages = useSelector((state) => state.interactions.messages)
-  const lastAppliedRef = useRef('')
+  const dispatch = useDispatch();
+  const messages = useSelector((state) => state.interactions.messages);
+  const lastAppliedRef = useRef('');
 
   useEffect(() => {
     if (!messages?.length) return;
-    const lastMsg = messages[messages.length - 1];
+
+    // Look for the most recent message from the assistant
+    const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
     
-    // Check if the message is from the assistant and has form updates
-    if (lastMsg.role === 'assistant' && lastMsg.structured_response?.form_updates) {
-        const updates = lastMsg.structured_response.form_updates;
-        console.log("🚀 Senior Dev Log: Applying AI Updates to Form:", updates);
-        dispatch(applyAiFormUpdates(updates));
-    }
-}, [messages, dispatch]);
-  
-  // useEffect(() => {
-  //   if (!messages?.length) return
-  //   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
-  //   if (!lastAssistant?.structured_response?.form_updates) return
+    if (!lastAssistant?.structured_response?.form_updates) return;
 
-  //   const updates = lastAssistant.structured_response.form_updates
-  //   const signature = JSON.stringify(updates)
-  //   if (!signature || signature === '{}' || signature === lastAppliedRef.current) return
+    const updates = lastAssistant.structured_response.form_updates;
+    const signature = JSON.stringify(updates);
 
-  //   dispatch(applyAiFormUpdates(updates))
-  //   lastAppliedRef.current = signature
-  // }, [dispatch, messages])
+    // Prevent infinite loops: only dispatch if the data is NEW
+    if (signature === '{}' || signature === lastAppliedRef.current) return;
 
-  return null
-}
+    console.log("🚀 Senior Dev: Auto-filling form with:", updates);
+    dispatch(applyAiFormUpdates(updates));
+    lastAppliedRef.current = signature;
+  }, [messages, dispatch]);
+
+  return null;
+};
 
 const App = () => {
   return (
