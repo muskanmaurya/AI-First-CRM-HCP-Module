@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid 
+import re
 import logging
 import os
 from datetime import date, datetime
@@ -33,7 +35,9 @@ def _get_cors_origins() -> list[str]:
     env_origins = os.getenv("CORS_ORIGINS") or os.getenv("FRONTEND_URL")
     origins = [
         "http://localhost:5173",
+        "http://localhost:10000", # Add this based on your logs
         "http://127.0.0.1:5173",
+        "https://ai-first-crm-hcp-module-1.onrender.com",
     ]
 
     if env_origins:
@@ -155,18 +159,17 @@ def _build_summary(payload: InteractionCreate, interaction_date: date) -> str:
 
 
 @app.post("/chat")
+
 def chat(payload: ChatRequest) -> dict[str, Any]:
     # ensure session exists (create when missing)
     session_id = payload.session_id
     with get_session() as db:
         if not session_id:
             # create a new session with a generic title
-            import uuid
 
             session_id = uuid.uuid4().hex
             # generate a better title from the first user message
             def _generate_title_from_message(msg: str) -> str:
-                import re
 
                 # Try to find patterns like 'Dr. Name' or 'Doctor Name'
                 m = re.search(r"(?:Dr\.?|Doctor)\s+([A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+)*)", msg)
