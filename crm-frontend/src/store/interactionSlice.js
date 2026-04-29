@@ -1,7 +1,7 @@
 import { createAsyncThunk, createSlice } from '@reduxjs/toolkit'
 import axios from 'axios'
 
-const API_BASE_URL = 'http://localhost:8000'
+const API_BASE_URL = '[https://ai-first-crm-hcp-module-hw8f.onrender.com](https://ai-first-crm-hcp-module-hw8f.onrender.com)'
 
 const todayIso = () => new Date().toISOString().split('T')[0]
 
@@ -223,14 +223,14 @@ const interactionSlice = createSlice({
 				state.loading = 'failed'
 			})
 			.addCase(addInteraction.pending, (state) => {
-				state.loading = 'loading'
+				state.formLoading = 'loading'
 			})
 			.addCase(addInteraction.fulfilled, (state, action) => {
-				state.loading = 'succeeded'
+				state.formLoading = 'succeeded'
 				state.interactions.unshift(action.payload)
 			})
 			.addCase(addInteraction.rejected, (state) => {
-				state.loading = 'failed'
+				state.formLoading = 'failed'
 			})
 			.addCase(fetchSessions.pending, (state) => {
 				state.loading = 'loading'
@@ -268,10 +268,10 @@ const interactionSlice = createSlice({
 				state.loading = 'failed'
 			})
 			.addCase(postChatMessage.pending, (state) => {
-				state.loading = 'loading'
+				state.chatLoading = 'loading'
 			})
 			.addCase(postChatMessage.fulfilled, (state, action) => {
-				state.loading = 'succeeded'
+				state.chatLoading = 'succeeded'
 				const sessionId = action.payload.session_id ?? action.payload.sessionId ?? null
 				if (sessionId) {
 					state.currentSessionId = sessionId
@@ -282,7 +282,7 @@ const interactionSlice = createSlice({
 				}
 			})
 			.addCase(postChatMessage.rejected, (state) => {
-				state.loading = 'failed'
+				state.chatLoading = 'failed'
 			})
 	},
 })

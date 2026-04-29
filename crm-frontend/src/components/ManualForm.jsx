@@ -221,7 +221,7 @@ const ManualForm = () => {
 	}
 
 	const handleSubmit = async (e) => {
-		e.preventDefault()
+		e.preventDefault() 
 		setFormError('')
 		setFormSuccess(false)
 
@@ -258,102 +258,99 @@ const ManualForm = () => {
 			setMaterialDraft('')
 			setSampleDraft('')
 			setFormSuccess(true)
-			setTimeout(() => setFormSuccess(false), 2500)
+			setTimeout(() => setFormSuccess(false), 3000)
 		} catch (error) {
 			setFormError(error || 'Failed to save interaction. Please try again.')
 		}
 	}
 
 	return (
-		<div className="h-dvh w-full overflow-hidden bg-slate-50 text-slate-900">
-			<div ref={splitContainerRef} className={`flex h-full min-h-0 overflow-hidden ${isDesktop ? 'flex-row' : 'flex-col'}`}>
+<div className="fixed inset-0 overflow-hidden bg-slate-50 text-slate-900 flex flex-col">        <div ref={splitContainerRef} className={`flex h-full w-full overflow-hidden ${isDesktop ? 'flex-row' : 'flex-col'}`}>
 				<div
-					className={`flex h-full min-h-0 flex-col bg-white ${isDesktop ? 'border-r border-slate-200' : 'flex-1 border-b border-slate-200'}`}
-					style={isDesktop ? { width: `${splitRatio}%` } : undefined}
-				>
-					<div className="border-b border-slate-200 bg-linear-to-r from-slate-50 to-blue-50 px-6 py-5">
-						<h2 className="text-xl font-semibold tracking-tight text-slate-900">AI Assistant Chat</h2>
-						<p className="text-sm text-slate-600">Chat with your healthcare AI to log interactions</p>
-					</div>
+                className={`flex flex-col bg-white ${isDesktop ? 'border-r border-slate-200' : 'h-1/2 border-b border-slate-200'}`}
+                style={isDesktop ? { width: `${splitRatio}%` } : undefined}
+            >
+					<div className="flex-none border-b border-slate-200 bg-slate-50 px-6 py-5">
+                    <h2 className="text-xl font-semibold tracking-tight text-slate-900">AI Assistant Chat</h2>
+                    <p className="text-sm text-slate-600">Chat with your healthcare AI to log interactions</p>
+                </div>
 
-					<div className="flex-1 overflow-y-auto px-6 py-5">
-						{messages.length === 0 ? (
-							<div className="flex h-full items-center justify-center text-center text-slate-500">
-								<div>
-									<div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-2xl shadow-sm">💬</div>
-									<p className="font-medium tracking-tight text-slate-700">Start a conversation</p>
-									<p className="mt-2 text-sm text-slate-500">Ask the AI to summarise or structure your interaction note.</p>
-								</div>
-							</div>
-						) : (
-							<div className="space-y-4">
-								{messages.map((message, index) => (
-									<div key={`${message.role}-${index}`} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-										<div className={`max-w-xl rounded-2xl border px-4 py-3 text-sm leading-relaxed shadow-sm ${message.role === 'user' ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 bg-slate-50 text-slate-800'}`}>
-											{message.content}
-										</div>
-									</div>
-								))}
+					<div className="flex-1 overflow-y-auto px-6 py-5 custom-scrollbar">
+                    {messages.length === 0 ? (
+                        <div className="flex h-full items-center justify-center text-center text-slate-500">
+                            <div>
+                                <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-slate-200 bg-slate-50 text-2xl shadow-sm">💬</div>
+                                <p className="font-medium tracking-tight text-slate-700">Start a conversation</p>
+                                <p className="mt-2 text-sm text-slate-500">Ask the AI to summarise or structure your interaction note.</p>
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="space-y-4">
+                            {messages.map((message, index) => (
+                                <div key={`${message.role}-${index}`} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                                    <div className={`max-w-xl rounded-2xl border px-4 py-3 text-sm leading-relaxed shadow-sm ${message.role === 'user' ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 bg-slate-50 text-slate-800'}`}>
+                                        {message.content}
+                                    </div>
+                                </div>
+                            ))}
 								{chatLoading && (
-									<div className="flex justify-start">
-										<div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 shadow-sm">
-											<div className="flex items-center gap-2">
-												<Loader className="h-4 w-4 animate-spin" />
-												<span>Thinking...</span>
-											</div>
-										</div>
-									</div>
-								)}
+                                <div className="flex justify-start">
+                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 shadow-sm">
+                                        <div className="flex items-center gap-2">
+                                            <Loader className="h-4 w-4 animate-spin" />
+                                            <span>Thinking...</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
 								<div ref={messagesEndRef} />
-							</div>
-						)}
-					</div>
+                        </div>
+                    )}
+                </div>
 
-					<div className="border-t border-slate-200 bg-white px-6 py-5">
-						{chatError && <p className="mb-3 text-sm text-red-600">{chatError}</p>}
-						<div className="flex items-end gap-3">
-							<textarea
-								value={chatInput}
-								onChange={(e) => setChatInput(e.target.value)}
-								onKeyDown={handleChatKeyPress}
-								placeholder="Type your message... (Shift+Enter for new line)"
-								rows={3}
-								className="min-h-22 flex-1 resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
-							/>
-							<button
-								type="button"
-								onClick={handleChatSend}
-								disabled={chatLoading || !chatInput.trim()}
-								className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-							>
-								<Send className="h-5 w-5" />
-							</button>
-						</div>
-					</div>
-				</div>
+					<div className="flex-none border-t border-slate-200 bg-white px-6 py-5">
+                    {chatError && <p className="mb-3 text-sm text-red-600">{chatError}</p>}
+                    <div className="flex items-end gap-3">
+                        <textarea
+                            value={chatInput}
+                            onChange={(e) => setChatInput(e.target.value)}
+                            onKeyDown={handleChatKeyPress}
+                            placeholder="Type your message..."
+                            rows={2}
+                            className="flex-1 resize-none rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-blue-400 focus:bg-white focus:ring-2 focus:ring-blue-100"
+                        />
+                        <button
+                            type="button"
+                            onClick={handleChatSend}
+                            disabled={chatLoading || !chatInput.trim()}
+                            className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-sm hover:bg-blue-700 disabled:bg-slate-300"
+                        >
+                            <Send className="h-5 w-5" />
+                        </button>
+                    </div>
+                </div>
+            </div>
 
 				{/* Draggable Divider */}
 				{isDesktop && (
-					<div
-						role="separator"
-						aria-orientation="vertical"
-						onMouseDown={startResizing}
-						className="w-2 cursor-col-resize bg-slate-200/70 transition hover:bg-blue-200"
-					/>
-				)}
+                <div
+                    onMouseDown={startResizing}
+                    className="w-1.5 cursor-col-resize bg-slate-200 transition-colors hover:bg-blue-400"
+                />
+            )}
 
 				<div
-					className={`flex h-full min-h-0 flex-col bg-slate-50 ${!isDesktop ? 'flex-1' : ''}`}
-					style={isDesktop ? { width: `${100 - splitRatio}%` } : undefined}
-				>
-					<div className="border-b border-slate-200 bg-linear-to-r from-slate-50 to-indigo-50 px-6 py-5">
-						<h2 className="text-xl font-semibold tracking-tight text-slate-900">Log Interaction</h2>
-						<p className="text-sm text-slate-600">Record structured Life Sciences CRM interaction details</p>
-					</div>
+                className="flex flex-col bg-slate-50 h-full overflow-hidden"
+                style={isDesktop ? { width: `${100 - splitRatio}%` } : { flex: 1 }}
+            >
+					<div className="flex-none border-b border-slate-200 bg-slate-50 px-6 py-5">
+                    <h2 className="text-xl font-semibold tracking-tight text-slate-900">Log Interaction</h2>
+                    <p className="text-sm text-slate-600">Record structured Life Sciences CRM interaction details</p>
+                </div>
 
-					<form onSubmit={handleSubmit} className="flex h-full min-h-0 flex-col">
-						<div className="flex-1 overflow-y-auto px-6 py-5">
-							<div className="space-y-5">
+					<form onSubmit={handleSubmit} className="flex flex-1 flex-col overflow-hidden">
+                    <div className="flex-1 overflow-y-auto px-6 py-5 custom-scrollbar">
+                        <div className="space-y-6 pb-4">
 						<div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
 							<div className="mb-5 flex items-center gap-2 text-sm font-semibold tracking-tight text-slate-900">
 								<User className="h-4 w-4 text-slate-500" />
@@ -554,22 +551,15 @@ const ManualForm = () => {
 							</div>
 						</div>
 
-						<div className="border-t border-slate-200 bg-white px-6 py-5">
-							<button
-								type="submit"
-								disabled={loading === 'loading'}
-								className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-linear-to-r from-blue-600 to-indigo-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:from-blue-700 hover:to-indigo-700 disabled:cursor-not-allowed disabled:from-slate-300 disabled:to-slate-300"
-							>
-								{loading === 'loading' ? (
-									<>
-										<Loader className="h-5 w-5 animate-spin" />
-										<span>Saving...</span>
-									</>
-								) : (
-									<span>Submit Interaction</span>
-								)}
-							</button>
-						</div>
+						<div className="flex-none border-t border-slate-200 bg-white px-6 py-5">
+                        <button
+                            type="submit"
+                            disabled={loading === 'loading'}
+                            className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-4 text-sm font-semibold text-white shadow-md hover:bg-blue-700 disabled:bg-slate-300"
+                        >
+                            {loading === 'loading' ? <Loader className="h-5 w-5 animate-spin" /> : <span>Submit Interaction</span>}
+                        </button>
+                    </div>
 					</form>
 				</div>
 			</div>

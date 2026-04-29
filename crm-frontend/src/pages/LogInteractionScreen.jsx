@@ -42,7 +42,7 @@ const LogInteractionScreen = () => {
     setChatLoading(true)
 
     try {
-      const response = await axios.post('http://localhost:8000/chat', {
+      const response = await axios.post('https://ai-first-crm-hcp-module-hw8f.onrender.com/chat', {
         message: chatInput,
         session_id: 'default_session',
       })
