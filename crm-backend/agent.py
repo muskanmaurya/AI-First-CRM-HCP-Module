@@ -2,13 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
-import operator
 import os
 import re
 import time
 from datetime import date, datetime
-from functools import lru_cache
-from typing import Annotated, Any, TypedDict
+from typing import Any, TypedDict
 from uuid import uuid4
 from dotenv import load_dotenv
 
@@ -47,6 +45,7 @@ GROQ_MODELS = [
 ]
 
 GROQ_MODEL = GROQ_MODELS[0]  # Primary model for backward compatibility
+FORM_FILLER_MODEL = "gemma2-9b-it"
 
 MODEL_FAILOVER_LOG: dict[str, list[str]] = {}  # Track failed models per session
 
@@ -149,6 +148,8 @@ SYSTEM_PROMPT = (
     "IMPORTANT: If the user mentions a doctor's name (e.g., 'Dr. Sharma', 'Dr Verma', 'Dr. Alice Johnson'), "
     "ALWAYS extract that name and use it directly with search_hcp_history. Do NOT ask the user for the name again. "
     "The search_hcp_history tool requires the hcp_name parameter to be the full doctor name as mentioned.\n\n"
+    "When extracting or updating medical names/terms, use typo-resilient reasoning and correct obvious misspellings "
+    "(for example, common medicine or doctor-name typos) before returning values.\n\n"
     "When the user asks to log, edit, search, list, or delete interactions, use the appropriate tool immediately. "
     "Keep responses concise, clinically aware, and operationally useful."
 )
@@ -158,6 +159,16 @@ class InteractionExtraction(BaseModel):
     hcp_name: str = Field(..., description="Doctor or HCP name")
     interaction_date: date = Field(..., description="Date of the interaction")
     summary: str = Field(..., description="Concise interaction summary")
+
+
+class FormExtractionResult(BaseModel):
+    intent: str = Field(default="NONE", description="One of NONE, EXTRACT, UPDATE")
+    hcp_name: str | None = Field(default=None)
+    interaction_date: str | None = Field(default=None, description="Date in ISO format when possible")
+    sentiment: str | None = Field(default=None, description="Positive, Neutral, or Negative")
+    topics: str | None = Field(default=None)
+    corrected_field: str | None = Field(default=None, description="Field name when intent is UPDATE")
+    corrected_value: str | None = Field(default=None, description="Corrected value when intent is UPDATE")
 
 
 class AgentState(TypedDict):
@@ -253,6 +264,131 @@ def _extract_doctor_name_from_text(text: str) -> str | None:
             else:
                 return match.group(1).strip()
     return None
+
+
+def _normalize_form_key(field_name: str | None) -> str | None:
+    if not field_name:
+        return None
+    field = field_name.strip().lower().replace(" ", "_")
+    mapping = {
+        "hcp": "hcp_name",
+        "doctor": "hcp_name",
+        "doctor_name": "hcp_name",
+        "hcp_name": "hcp_name",
+        "name": "hcp_name",
+        "date": "interaction_date",
+        "interaction_date": "interaction_date",
+        "sentiment": "sentiment",
+        "hcp_sentiment": "sentiment",
+        "topics": "topics",
+        "topic": "topics",
+    }
+    return mapping.get(field)
+
+
+def _fallback_form_extraction(user_text: str) -> FormExtractionResult:
+    lowered = user_text.lower()
+    correction_match = re.search(r"i\s+meant\s+(.+?)\s*,?\s*not\s+(.+)$", user_text, re.IGNORECASE)
+    if correction_match:
+        corrected = correction_match.group(1).strip().rstrip(".")
+        return FormExtractionResult(
+            intent="UPDATE",
+            corrected_field="hcp_name",
+            corrected_value=corrected,
+            hcp_name=corrected,
+        )
+
+    hcp_name = _extract_doctor_name_from_text(user_text)
+
+    sentiment = None
+    if any(term in lowered for term in ["positive", "good", "excellent", "great"]):
+        sentiment = "Positive"
+    elif any(term in lowered for term in ["neutral", "okay", "average"]):
+        sentiment = "Neutral"
+    elif any(term in lowered for term in ["negative", "poor", "bad"]):
+        sentiment = "Negative"
+
+    date_match = re.search(
+        r"(\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4}|\d{2}-\d{2}-\d{4}|[A-Za-z]+\s+\d{1,2},\s+\d{4})",
+        user_text,
+    )
+    parsed_date = None
+    if date_match:
+        parsed_date = _parse_date(date_match.group(1)).isoformat()
+
+    topics = user_text.strip() if user_text.strip() else None
+    intent = "EXTRACT" if any([hcp_name, sentiment, parsed_date, topics]) else "NONE"
+
+    return FormExtractionResult(
+        intent=intent,
+        hcp_name=hcp_name,
+        interaction_date=parsed_date,
+        sentiment=sentiment,
+        topics=topics,
+    )
+
+
+def _extract_form_intent_and_updates(user_text: str) -> dict[str, Any]:
+    extraction_llm = ChatGroq(
+        model=FORM_FILLER_MODEL,
+        temperature=0,
+        api_key=GROQ_API_KEY,
+        max_retries=0,
+    ).with_structured_output(FormExtractionResult)
+
+    prompt = (
+        "You are an agentic CRM form-filler extractor. "
+        "Extract these fields from the user's message when present: hcp_name, interaction_date, sentiment, topics. "
+        "Detect correction/update intent when the user corrects earlier data (e.g., 'I meant Dr. Sharma, not Dr. Batra'). "
+        "If correction intent is present, set intent=UPDATE and provide only corrected_field and corrected_value for the changed field. "
+        "Use typo-resilient common-sense reasoning to fix obvious misspellings in names and medical terms before returning values. "
+        "Return only structured fields.\n\n"
+        f"User message: {user_text}"
+    )
+
+    try:
+        result = _invoke_with_retry(extraction_llm, prompt)
+        if not isinstance(result, FormExtractionResult):
+            result = _fallback_form_extraction(user_text)
+    except Exception as e:
+        logger.warning(f"Form extraction fallback due to: {type(e).__name__}: {str(e)[:80]}")
+        result = _fallback_form_extraction(user_text)
+
+    intent = (result.intent or "NONE").upper()
+    form_updates: dict[str, Any] = {}
+
+    if intent == "UPDATE":
+        corrected_key = _normalize_form_key(result.corrected_field)
+        if corrected_key and result.corrected_value:
+            form_updates[corrected_key] = result.corrected_value.strip()
+    else:
+        if result.hcp_name:
+            form_updates["hcp_name"] = result.hcp_name.strip()
+        if result.interaction_date:
+            form_updates["interaction_date"] = result.interaction_date
+        if result.sentiment:
+            sentiment_value = result.sentiment.capitalize()
+            if sentiment_value in {"Positive", "Neutral", "Negative"}:
+                form_updates["sentiment"] = sentiment_value
+            else:
+                form_updates["sentiment"] = result.sentiment
+        if result.topics:
+            form_updates["topics"] = result.topics.strip()
+
+    if intent == "UPDATE" and form_updates:
+        only_key = next(iter(form_updates.keys()))
+        only_value = form_updates[only_key]
+        response_text = f"I have updated {only_key.replace('_', ' ')} to {only_value} for you."
+    elif form_updates:
+        response_text = "I captured the interaction details and pre-filled the form fields for you."
+    else:
+        response_text = "I am ready to capture interaction details whenever you share them."
+
+    return {
+        "intent": intent,
+        "text": response_text,
+        "form_updates": form_updates,
+    }
 
 
 def _serialize_rows(rows) -> list[dict]:
@@ -554,9 +690,14 @@ def run_chat(message: str, session_id: str | None = None) -> dict:
     # Input validation
     if not message or not isinstance(message, str):
         logger.warning(f"[{thread_id}] Invalid message")
+        structured_response = {
+            "text": "Please provide a valid message.",
+            "form_updates": {},
+        }
         return {
             "session_id": thread_id,
-            "response": "Please provide a valid message.",
+            "response": structured_response["text"],
+            "structured_response": structured_response,
             "tool_actions": [],
             "status": "error",
         }
@@ -567,35 +708,52 @@ def run_chat(message: str, session_id: str | None = None) -> dict:
         orchestrator_result = _orchestrate([HumanMessage(content=message)], session_id=thread_id)
         messages = orchestrator_result.get("messages", [])
         response_text = _extract_final_response(messages).strip()
+        extracted = _extract_form_intent_and_updates(message)
+        structured_response = {
+            "text": extracted.get("text") or response_text,
+            "form_updates": extracted.get("form_updates", {}),
+        }
 
         if not response_text:
             response_text = "I couldn't generate a reply just now. Please try again in a moment."
+
+        if extracted.get("intent") == "UPDATE" and structured_response["text"]:
+            response_text = structured_response["text"]
 
         logger.info(f"[{thread_id}] Chat completed successfully")
 
         return {
             "session_id": thread_id,
             "response": response_text,
+            "structured_response": structured_response,
             "tool_actions": orchestrator_result.get("tool_actions", []),
             "status": "success",
         }
     
     except (RateLimitError, RuntimeError) as e:
         logger.warning(f"[{thread_id}] Model failover exhausted: {str(e)[:100]}")
+        structured_response = {
+            "text": "The AI is currently experiencing high demand across all models, but your interaction has been logged to the database for processing later.",
+            "form_updates": {},
+        }
         return {
             "session_id": thread_id,
-            "response": "The AI is currently experiencing high demand across all models, "
-            "but your interaction has been logged to the database for processing later.",
+            "response": structured_response["text"],
+            "structured_response": structured_response,
             "tool_actions": [],
             "status": "success",
         }
     
     except Exception as e:
         logger.error(f"[{thread_id}] Unexpected error: {type(e).__name__}: {str(e)[:100]}")
+        structured_response = {
+            "text": "The AI is currently experiencing high demand across all models, but your interaction has been logged to the database for processing later.",
+            "form_updates": {},
+        }
         return {
             "session_id": thread_id,
-            "response": "The AI is currently experiencing high demand across all models, "
-            "but your interaction has been logged to the database for processing later.",
+            "response": structured_response["text"],
+            "structured_response": structured_response,
             "tool_actions": [],
             "status": "success",
         }

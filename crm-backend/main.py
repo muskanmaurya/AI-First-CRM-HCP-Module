@@ -29,6 +29,24 @@ from database import ChatSession
 logger = logging.getLogger(__name__)
 
 
+def _get_cors_origins() -> list[str]:
+    env_origins = os.getenv("CORS_ORIGINS") or os.getenv("FRONTEND_URL")
+    origins = [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ]
+
+    if env_origins:
+        origins.extend([origin.strip() for origin in env_origins.split(",") if origin.strip()])
+
+    vercel_url = os.getenv("VERCEL_URL")
+    if vercel_url:
+        vercel_origin = vercel_url if vercel_url.startswith("http") else f"https://{vercel_url}"
+        origins.append(vercel_origin)
+
+    return list(dict.fromkeys(origins))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if os.getenv("SKIP_DB_INIT_ON_STARTUP", "false").lower() == "true":
@@ -50,7 +68,8 @@ app = FastAPI(title="AI-First CRM HCP Module", lifespan=lifespan)
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=_get_cors_origins(),
+    allow_origin_regex=r"https://.*\.vercel\.app|http://localhost(:\d+)?|http://127\.0\.0\.1(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -62,11 +81,22 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
 
 
-class ManualLogRequest(BaseModel):
-    hcp_name: str = Field(..., min_length=1)
-    interaction_date: date | str
-    interaction_type: str = Field(default="Form")
-    summary: str = Field(..., min_length=1)
+class InteractionCreate(BaseModel):
+    hcp_name: str | None = None
+    interaction_date: date | str | None = None
+    interaction_type: str | None = None
+    time: str | None = None
+    attendees: str | None = None
+    topics: str | None = None
+    materials: list[str] | str | None = None
+    samples: list[str] | str | None = None
+    sentiment: str | None = None
+    outcomes: str | None = None
+    follow_up: str | None = None
+    summary: str | None = None
+
+
+ManualLogRequest = InteractionCreate
 
 
 # init_db is handled by the FastAPI lifespan above
@@ -84,6 +114,44 @@ def _parse_date(value: date | str) -> date:
         return date.fromisoformat(value)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid interaction_date: {value}") from exc
+
+
+def _normalize_text_list(value: list[str] | str | None) -> list[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, list):
+        cleaned = [str(item).strip() for item in value if str(item).strip()]
+        return cleaned or None
+    cleaned = [item.strip() for item in value.replace("\n", ",").split(",") if item.strip()]
+    return cleaned or None
+
+
+def _build_summary(payload: InteractionCreate, interaction_date: date) -> str:
+    parts = []
+    if payload.hcp_name:
+        parts.append(f"HCP: {payload.hcp_name}")
+    parts.append(f"Date: {interaction_date.isoformat()}")
+    if payload.interaction_type:
+        parts.append(f"Type: {payload.interaction_type}")
+    if payload.time:
+        parts.append(f"Time: {payload.time}")
+    if payload.attendees:
+        parts.append(f"Attendees: {payload.attendees}")
+    if payload.topics:
+        parts.append(f"Topics: {payload.topics}")
+    materials = _normalize_text_list(payload.materials)
+    if materials:
+        parts.append(f"Materials: {', '.join(materials)}")
+    samples = _normalize_text_list(payload.samples)
+    if samples:
+        parts.append(f"Samples: {', '.join(samples)}")
+    if payload.sentiment:
+        parts.append(f"Sentiment: {payload.sentiment}")
+    if payload.outcomes:
+        parts.append(f"Outcomes: {payload.outcomes}")
+    if payload.follow_up:
+        parts.append(f"Follow-up: {payload.follow_up}")
+    return " | ".join(parts) or "Interaction logged."
 
 
 @app.post("/chat")
@@ -162,15 +230,31 @@ def get_session_messages(session_id: str) -> dict[str, Any]:
 
 
 @app.post("/manual-log")
-def manual_log(payload: ManualLogRequest) -> dict[str, Any]:
+def manual_log(payload: InteractionCreate) -> dict[str, Any]:
+    if not payload.hcp_name or not payload.hcp_name.strip():
+        raise HTTPException(status_code=400, detail="HCP Name is required")
+    if not payload.interaction_date:
+        raise HTTPException(status_code=400, detail="Date is required")
+
     interaction_date = _parse_date(payload.interaction_date)
+    materials = _normalize_text_list(payload.materials)
+    samples = _normalize_text_list(payload.samples)
+    summary = payload.summary or _build_summary(payload, interaction_date)
     with get_session() as session:
         record = create_interaction(
             session,
             hcp_name=payload.hcp_name,
             interaction_date=interaction_date,
             interaction_type=payload.interaction_type,
-            summary=payload.summary,
+            time=payload.time,
+            attendees=payload.attendees,
+            topics=payload.topics,
+            materials=materials,
+            samples=samples,
+            sentiment=payload.sentiment,
+            outcomes=payload.outcomes,
+            follow_up=payload.follow_up,
+            summary=summary,
         )
         return {"status": "saved", "interaction": serialize_interaction(record)}
 

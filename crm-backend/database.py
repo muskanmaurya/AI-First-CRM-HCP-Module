@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from datetime import date, datetime, timezone
 from typing import Generator
 
-from sqlalchemy import Date, DateTime, Integer, String, Text, create_engine, func
+from sqlalchemy import Date, DateTime, Integer, JSON, String, Text, create_engine, inspect, func, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 
@@ -63,8 +63,60 @@ class Base(DeclarativeBase):
     pass
 
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+_engine = None
+_SessionLocal = None
+
+
+def get_engine():
+    """Lazy-load SQLAlchemy engine to avoid crashes during import."""
+    global _engine
+    if _engine is None:
+        _engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
+    return _engine
+
+
+def get_session_maker():
+    """Lazy-load session maker."""
+    global _SessionLocal
+    if _SessionLocal is None:
+        _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=get_engine())
+    return _SessionLocal
+
+
+def _build_summary(
+    *,
+    hcp_name: str,
+    interaction_date: date,
+    interaction_type: str | None = None,
+    time: str | None = None,
+    attendees: str | None = None,
+    topics: str | None = None,
+    materials: list | None = None,
+    samples: list | None = None,
+    sentiment: str | None = None,
+    outcomes: str | None = None,
+    follow_up: str | None = None,
+) -> str:
+    parts = [f"HCP: {hcp_name}", f"Date: {interaction_date.isoformat()}"]
+    if interaction_type:
+        parts.append(f"Type: {interaction_type}")
+    if time:
+        parts.append(f"Time: {time}")
+    if attendees:
+        parts.append(f"Attendees: {attendees}")
+    if topics:
+        parts.append(f"Topics: {topics}")
+    if materials:
+        parts.append(f"Materials: {', '.join(map(str, materials))}")
+    if samples:
+        parts.append(f"Samples: {', '.join(map(str, samples))}")
+    if sentiment:
+        parts.append(f"Sentiment: {sentiment}")
+    if outcomes:
+        parts.append(f"Outcomes: {outcomes}")
+    if follow_up:
+        parts.append(f"Follow-up: {follow_up}")
+    return " | ".join(parts)
 
 
 class HCPInteraction(Base):
@@ -73,8 +125,16 @@ class HCPInteraction(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     hcp_name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     interaction_date: Mapped[date] = mapped_column(Date, nullable=False)
-    interaction_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    interaction_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    time: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    attendees: Mapped[str | None] = mapped_column(Text, nullable=True)
+    topics: Mapped[str | None] = mapped_column(Text, nullable=True)
+    materials: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    samples: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    sentiment: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    outcomes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    follow_up: Mapped[str | None] = mapped_column(Text, nullable=True)
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,
@@ -106,13 +166,27 @@ class ChatMessage(Base):
 
 
 
+def _ensure_interaction_columns() -> None:
+    engine = get_engine()
+    inspector = inspect(engine)
+    existing_columns = {column["name"] for column in inspector.get_columns(HCPInteraction.__tablename__)}
+
+    with engine.begin() as connection:
+        for column in HCPInteraction.__table__.columns:
+            if column.name == "id" or column.name in existing_columns:
+                continue
+            compiled_type = column.type.compile(dialect=engine.dialect)
+            connection.execute(text(f'ALTER TABLE {HCPInteraction.__tablename__} ADD COLUMN {column.name} {compiled_type}'))
+
+
 def init_db() -> None:
-    Base.metadata.create_all(bind=engine)
+    Base.metadata.create_all(bind=get_engine())
+    _ensure_interaction_columns()
 
 
 @contextmanager
 def get_session() -> Generator:
-    session = SessionLocal()
+    session = get_session_maker()()
     try:
         yield session
         session.commit()
@@ -129,6 +203,14 @@ def serialize_interaction(interaction: HCPInteraction) -> dict:
         "hcp_name": interaction.hcp_name,
         "interaction_date": interaction.interaction_date.isoformat(),
         "interaction_type": interaction.interaction_type,
+        "time": interaction.time,
+        "attendees": interaction.attendees,
+        "topics": interaction.topics,
+        "materials": interaction.materials,
+        "samples": interaction.samples,
+        "sentiment": interaction.sentiment,
+        "outcomes": interaction.outcomes,
+        "follow_up": interaction.follow_up,
         "summary": interaction.summary,
         "timestamp": interaction.timestamp.isoformat() if interaction.timestamp else None,
     }
@@ -168,14 +250,44 @@ def create_interaction(
     *,
     hcp_name: str,
     interaction_date: date,
-    interaction_type: str,
-    summary: str,
+    interaction_type: str | None = None,
+    time: str | None = None,
+    attendees: str | None = None,
+    topics: str | None = None,
+    materials: list | None = None,
+    samples: list | None = None,
+    sentiment: str | None = None,
+    outcomes: str | None = None,
+    follow_up: str | None = None,
+    summary: str | None = None,
 ) -> HCPInteraction:
+    derived_summary = summary or _build_summary(
+        hcp_name=hcp_name,
+        interaction_date=interaction_date,
+        interaction_type=interaction_type,
+        time=time,
+        attendees=attendees,
+        topics=topics,
+        materials=materials,
+        samples=samples,
+        sentiment=sentiment,
+        outcomes=outcomes,
+        follow_up=follow_up,
+    )
+
     interaction = HCPInteraction(
         hcp_name=hcp_name.strip(),
         interaction_date=interaction_date,
-        interaction_type=interaction_type.strip(),
-        summary=summary.strip(),
+        interaction_type=interaction_type.strip() if interaction_type else None,
+        time=time.strip() if isinstance(time, str) and time.strip() else time,
+        attendees=attendees.strip() if isinstance(attendees, str) and attendees.strip() else attendees,
+        topics=topics.strip() if isinstance(topics, str) and topics.strip() else topics,
+        materials=materials,
+        samples=samples,
+        sentiment=sentiment.strip() if isinstance(sentiment, str) and sentiment.strip() else sentiment,
+        outcomes=outcomes.strip() if isinstance(outcomes, str) and outcomes.strip() else outcomes,
+        follow_up=follow_up.strip() if isinstance(follow_up, str) and follow_up.strip() else follow_up,
+        summary=derived_summary.strip() if derived_summary else None,
     )
     session.add(interaction)
     session.flush()
@@ -194,6 +306,22 @@ def update_interaction(session, interaction_id: int, updates: dict) -> HCPIntera
         interaction.interaction_date = updates["interaction_date"]
     if "interaction_type" in updates and updates["interaction_type"] is not None:
         interaction.interaction_type = str(updates["interaction_type"]).strip()
+    if "time" in updates:
+        interaction.time = str(updates["time"]).strip() if updates["time"] else None
+    if "attendees" in updates:
+        interaction.attendees = str(updates["attendees"]).strip() if updates["attendees"] else None
+    if "topics" in updates:
+        interaction.topics = str(updates["topics"]).strip() if updates["topics"] else None
+    if "materials" in updates:
+        interaction.materials = updates["materials"]
+    if "samples" in updates:
+        interaction.samples = updates["samples"]
+    if "sentiment" in updates:
+        interaction.sentiment = str(updates["sentiment"]).strip() if updates["sentiment"] else None
+    if "outcomes" in updates:
+        interaction.outcomes = str(updates["outcomes"]).strip() if updates["outcomes"] else None
+    if "follow_up" in updates:
+        interaction.follow_up = str(updates["follow_up"]).strip() if updates["follow_up"] else None
     if "summary" in updates and updates["summary"] is not None:
         interaction.summary = str(updates["summary"]).strip()
 

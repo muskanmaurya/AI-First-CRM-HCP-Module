@@ -1,0 +1,102 @@
+﻿Collecting fastapi==0.104.1 (from -r requirements.txt (line 1))
+  Using cached fastapi-0.104.1-py3-none-any.whl.metadata (24 kB)
+Collecting uvicorn==0.24.0 (from uvicorn[standard]==0.24.0->-r requirements.txt (line 2))
+  Using cached uvicorn-0.24.0-py3-none-any.whl.metadata (6.4 kB)
+Collecting python-dotenv==1.0.0 (from -r requirements.txt (line 3))
+  Using cached python_dotenv-1.0.0-py3-none-any.whl.metadata (21 kB)
+Collecting pydantic==2.5.0 (from -r requirements.txt (line 4))
+  Using cached pydantic-2.5.0-py3-none-any.whl.metadata (174 kB)
+Collecting langchain-core==0.1.40 (from -r requirements.txt (line 5))
+  Using cached langchain_core-0.1.40-py3-none-any.whl.metadata (5.9 kB)
+Collecting langchain-groq==0.1.0 (from -r requirements.txt (line 6))
+  Using cached langchain_groq-0.1.0-py3-none-any.whl.metadata (2.8 kB)
+Collecting langgraph==0.0.20 (from -r requirements.txt (line 7))
+  Using cached langgraph-0.0.20-py3-none-any.whl.metadata (30 kB)
+Collecting sqlalchemy==2.0.23 (from -r requirements.txt (line 8))
+  Using cached SQLAlchemy-2.0.23-py3-none-any.whl.metadata (9.6 kB)
+Collecting psycopg2-binary==2.9.6 (from -r requirements.txt (line 9))
+  Using cached psycopg2-binary-2.9.6.tar.gz (384 kB)
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'error'
+pip :   error: subprocess-exited-with-error
+At line:1 char:1
++ pip install -r requirements.txt 2>&1 | 
+Out-File -FilePath install_utf ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (  
+    error: subprocess-exited-with-error:Strin  
+  g) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandErr 
+   or
+ 
+  
+  Getting requirements to build wheel did not 
+run successfully.
+  exit code: 1
+  
+  [34 lines of output]
+  C:\Users\muska\AppData\Local\Temp\pip-build-e
+nv-20fpte5j\overlay\Lib\site-packages\setuptool
+s\dist.py:765: SetuptoolsDeprecationWarning: 
+License classifiers are deprecated.
+  !!
+  
+          *************************************
+*******************************************
+          Please consider removing the 
+following classifiers in favor of a SPDX 
+license expression:
+  
+          License :: OSI Approved :: GNU 
+Library or Lesser General Public License (LGPL)
+  
+          See https://packaging.python.org/en/l
+atest/guides/writing-pyproject-toml/#license 
+for details.
+          *************************************
+*******************************************
+  
+  !!
+    self._finalize_license_expression()
+  running egg_info
+  writing psycopg2_binary.egg-info\PKG-INFO
+  writing dependency_links to 
+psycopg2_binary.egg-info\dependency_links.txt
+  writing top-level names to 
+psycopg2_binary.egg-info\top_level.txt
+  
+  Error: pg_config executable not found.
+  
+  pg_config is required to build psycopg2 from 
+source.  Please add the directory
+  containing pg_config to the $PATH or specify 
+the full executable path with the
+  option:
+  
+      python setup.py build_ext --pg-config 
+/path/to/pg_config build ...
+  
+  or with the pg_config option in 'setup.cfg'.
+  
+  If you prefer to avoid building psycopg2 
+from source, please install the PyPI
+  'psycopg2-binary' package instead.
+  
+  For further information please check the 
+'doc/src/install.rst' file (also at
+  <https://www.psycopg.org/docs/install.html>).
+  
+  [end of output]
+  
+  note: This error originates from a 
+subprocess, and is likely not a problem with 
+pip.
+
+[notice] A new release of pip is available: 
+25.3 -> 26.1
+[notice] To update, run: python.exe -m pip 
+install --upgrade pip
+ERROR: Failed to build 'psycopg2-binary' when 
+getting requirements to build wheel
