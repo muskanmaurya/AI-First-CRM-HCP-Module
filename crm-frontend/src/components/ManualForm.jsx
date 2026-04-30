@@ -121,7 +121,7 @@ const ChipListEditor = ({
 const ManualForm = () => {
   const dispatch = useDispatch();
   const { 
-    loading, 
+    formLoading,
     messages, 
     currentSessionId, 
     interactions, 
@@ -387,7 +387,7 @@ const ManualForm = () => {
     </div>
   </div>
 ))}
-                {chatLoading && (
+                {chatLoading === "loading" && (
                   <div className="flex justify-start">
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 shadow-sm">
                       <div className="flex items-center gap-2">
@@ -418,7 +418,7 @@ const ManualForm = () => {
               <button
                 type="button"
                 onClick={handleChatSend}
-                disabled={chatLoading || !chatInput.trim()}
+                disabled={chatLoading === "loading" || !chatInput.trim()}
                 className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600 text-white shadow-sm hover:bg-blue-700 disabled:bg-slate-300"
               >
                 <Send className="h-5 w-5" />
@@ -802,10 +802,10 @@ const ManualForm = () => {
             <div className="flex-none border-t border-slate-200 bg-white px-6 py-5">
               <button
                 type="submit"
-                disabled={loading === "loading"}
+                disabled={formLoading === "loading"}
                 className="inline-flex w-full items-center justify-center gap-2 rounded-2xl bg-blue-600 px-4 py-4 text-sm font-semibold text-white shadow-md hover:bg-blue-700 disabled:bg-slate-300"
               >
-                {loading === "loading" ? (
+                {formLoading === "loading" ? (
                   <Loader className="h-5 w-5 animate-spin" />
                 ) : (
                   <span>Submit Interaction</span>

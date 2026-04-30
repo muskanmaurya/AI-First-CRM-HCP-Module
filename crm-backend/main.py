@@ -5,12 +5,15 @@ import re
 import uuid
 import logging
 import os
+from pathlib import Path
 from datetime import date, datetime
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import OperationalError
 
@@ -69,6 +72,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="AI-First CRM HCP Module", lifespan=lifespan)
+FRONTEND_DIST_DIR = Path(__file__).resolve().parent.parent / "crm-frontend" / "dist"
 
 # Add CORS middleware
 app.add_middleware(
@@ -277,3 +281,36 @@ def history(hcp_name: str) -> dict[str, Any]:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+if FRONTEND_DIST_DIR.exists():
+        app.mount("/", StaticFiles(directory=str(FRONTEND_DIST_DIR), html=True), name="frontend")
+else:
+
+        @app.get("/", response_class=HTMLResponse)
+        def root() -> str:
+                return """
+                <!doctype html>
+                <html lang="en">
+                    <head>
+                        <meta charset="utf-8" />
+                        <meta name="viewport" content="width=device-width, initial-scale=1" />
+                        <title>AI-First CRM HCP Module</title>
+                        <style>
+                            body { font-family: Inter, Arial, sans-serif; margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f8fafc; color: #0f172a; }
+                            .card { max-width: 560px; padding: 32px; border: 1px solid #e2e8f0; border-radius: 24px; background: white; box-shadow: 0 20px 60px rgba(15, 23, 42, 0.08); }
+                            h1 { margin: 0 0 12px; font-size: 28px; }
+                            p { margin: 0 0 12px; line-height: 1.5; color: #334155; }
+                            a { color: #2563eb; text-decoration: none; font-weight: 600; }
+                        </style>
+                    </head>
+                    <body>
+                        <main class="card">
+                            <h1>Frontend not built yet</h1>
+                            <p>The backend is running, but the Vite production bundle was not found at <strong>crm-frontend/dist</strong>.</p>
+                            <p>Build the frontend and redeploy, or open the frontend service URL directly if it is deployed separately.</p>
+                            <p><a href="/health">Check API health</a></p>
+                        </main>
+                    </body>
+                </html>
+                """

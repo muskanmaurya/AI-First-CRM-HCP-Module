@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
-import re
-import uuid
 import logging
 import os
+import re
 import time
+import uuid
 from datetime import date, datetime
 from typing import Any, TypedDict
 from dotenv import load_dotenv
@@ -140,12 +140,12 @@ SYSTEM_PROMPT = (
     "You help manage Healthcare Professional interactions and have access to these tools:\n"
     "- log_interaction: Save new HCP meeting notes to database\n"
     "- edit_interaction: Update existing interaction by ID\n"
-    "- search_hcp: Find past meetings with a specific Doctor (pass the doctor name directly if mentioned)\n"
-    "- get_recent_history: Retrieve the last 5 interactions for one doctor\n"
-    "- summarize_notes: Create a concise clinical summary from multiple notes\n\n"
+    "- search_hcp_history: Find past meetings with a specific Doctor (pass the doctor name directly if mentioned)\n"
+    "- get_recent_interactions: Retrieve exactly the last 5 interactions for one doctor\n"
+    "- summarize_interactions: Create a concise clinical summary from multiple notes\n\n"
     "IMPORTANT: If the user mentions a doctor's name (e.g., 'Dr. Sharma', 'Dr Verma', 'Dr. Alice Johnson'), "
-    "ALWAYS extract that name and use it directly with search_hcp. Do NOT ask the user for the name again. "
-    "The search_hcp tool requires the hcp_name parameter to be the full doctor name as mentioned.\n\n"
+    "ALWAYS extract that name and use it directly with search_hcp_history. Do NOT ask the user for the name again. "
+    "The search_hcp_history tool requires the hcp_name parameter to be the full doctor name as mentioned.\n\n"
     "When extracting or updating medical names/terms, use typo-resilient reasoning and correct obvious misspellings "
     "(for example, common medicine or doctor-name typos) before returning values.\n\n"
     "When the user asks to log, edit, search, review recent history, or summarize interactions, use the appropriate tool immediately. "
@@ -393,7 +393,17 @@ def _serialize_rows(rows) -> list[dict]:
     return [serialize_interaction(row) for row in rows]
 
 
-@tool
+def _tool_error_payload(action: str, error: Exception, **extra: Any) -> dict[str, Any]:
+    return {
+        "status": "error",
+        "action": action,
+        "message": f"{action} failed",
+        "error": f"{type(error).__name__}: {str(error)[:100]}",
+        **extra,
+    }
+
+
+@tool("log_interaction")
 def log_interaction(text: str, interaction_type: str = "Chat") -> dict:
     """Extract an HCP interaction from free text and save it to the database."""
     try:
@@ -412,18 +422,23 @@ def log_interaction(text: str, interaction_type: str = "Chat") -> dict:
             }
     except Exception as e:
         logger.error(f"log_interaction error: {type(e).__name__}: {str(e)}")
-        return {
-            "status": "error",
-            "error": f"Failed to log interaction: {str(e)[:100]}",
-        }
+        return _tool_error_payload("log_interaction", e, interaction=None)
 
 
-@tool
+@tool("edit_interaction")
 def edit_interaction(
     interaction_id: int,
     hcp_name: str | None = None,
     interaction_date: str | None = None,
     interaction_type: str | None = None,
+    time: str | None = None,
+    attendees: str | None = None,
+    topics: str | None = None,
+    materials: list[str] | str | None = None,
+    samples: list[str] | str | None = None,
+    sentiment: str | None = None,
+    outcomes: str | None = None,
+    follow_up: str | None = None,
     summary: str | None = None,
 ) -> dict:
     """Update an existing HCP interaction by ID."""
@@ -435,6 +450,22 @@ def edit_interaction(
             updates["interaction_date"] = _parse_date(interaction_date)
         if interaction_type is not None:
             updates["interaction_type"] = interaction_type
+        if time is not None:
+            updates["time"] = time
+        if attendees is not None:
+            updates["attendees"] = attendees
+        if topics is not None:
+            updates["topics"] = topics
+        if materials is not None:
+            updates["materials"] = materials if isinstance(materials, list) else [item.strip() for item in materials.split(",") if item.strip()]
+        if samples is not None:
+            updates["samples"] = samples if isinstance(samples, list) else [item.strip() for item in samples.split(",") if item.strip()]
+        if sentiment is not None:
+            updates["sentiment"] = sentiment
+        if outcomes is not None:
+            updates["outcomes"] = outcomes
+        if follow_up is not None:
+            updates["follow_up"] = follow_up
         if summary is not None:
             updates["summary"] = summary
 
@@ -445,14 +476,11 @@ def edit_interaction(
             return {"status": "updated", "interaction": serialize_interaction(record)}
     except Exception as e:
         logger.error(f"edit_interaction error: {type(e).__name__}: {str(e)}")
-        return {
-            "status": "error",
-            "error": f"Failed to edit interaction: {str(e)[:100]}",
-        }
+        return _tool_error_payload("edit_interaction", e, interaction_id=interaction_id, interaction=None)
 
 
-@tool
-def search_hcp(hcp_name: str) -> dict:
+@tool("search_hcp_history")
+def search_hcp_history(hcp_name: str) -> dict:
     """
     Search the database for all past meetings with a specific Healthcare Professional.
     
@@ -477,16 +505,12 @@ def search_hcp(hcp_name: str) -> dict:
                 "results": _serialize_rows(rows),
             }
     except Exception as e:
-        logger.error(f"search_hcp error: {type(e).__name__}: {str(e)}")
-        return {
-            "status": "error",
-            "hcp_name": hcp_name,
-            "error": f"Failed to search interactions: {str(e)[:100]}",
-        }
+        logger.error(f"search_hcp_history error: {type(e).__name__}: {str(e)}")
+        return _tool_error_payload("search_hcp_history", e, hcp_name=hcp_name, count=0, results=[])
 
 
-@tool
-def get_recent_history(hcp_name: str) -> dict:
+@tool("get_recent_interactions")
+def get_recent_interactions(hcp_name: str) -> dict:
     """Fetch exactly the last 5 interactions for a specific HCP."""
     try:
         with get_session() as session:
@@ -498,16 +522,12 @@ def get_recent_history(hcp_name: str) -> dict:
                 "results": _serialize_rows(rows),
             }
     except Exception as e:
-        logger.error(f"get_recent_history error: {type(e).__name__}: {str(e)}")
-        return {
-            "status": "error",
-            "hcp_name": hcp_name,
-            "error": f"Failed to fetch interactions: {str(e)[:100]}",
-        }
+        logger.error(f"get_recent_interactions error: {type(e).__name__}: {str(e)}")
+        return _tool_error_payload("get_recent_interactions", e, hcp_name=hcp_name, count=0, results=[])
 
 
-@tool
-def summarize_notes(hcp_name: str, limit: int = 5) -> dict:
+@tool("summarize_interactions")
+def summarize_interactions(hcp_name: str, limit: int = 5) -> dict:
     """Generate a concise clinical summary from the most recent notes for an HCP."""
     try:
         with get_session() as session:
@@ -568,18 +588,16 @@ def summarize_notes(hcp_name: str, limit: int = 5) -> dict:
                 "notes": _serialize_rows(rows),
             }
     except Exception as e:
-        logger.error(f"summarize_notes error: {type(e).__name__}: {str(e)}")
-        return {
-            "status": "error",
-            "hcp_name": hcp_name,
-            "error": f"Failed to summarize notes: {str(e)[:100]}",
-        }
+        logger.error(f"summarize_interactions error: {type(e).__name__}: {str(e)}")
+        return _tool_error_payload("summarize_interactions", e, hcp_name=hcp_name, count=0, summary="")
 
 
-search_hcp_history = search_hcp
+search_hcp = search_hcp_history
+get_recent_history = get_recent_interactions
+summarize_notes = summarize_interactions
 
 
-TOOLS = [log_interaction, edit_interaction, search_hcp, get_recent_history, summarize_notes]
+TOOLS = [log_interaction, edit_interaction, search_hcp_history, get_recent_interactions, summarize_interactions]
 TOOL_MAP = {tool_object.name: tool_object for tool_object in TOOLS}
 
 
@@ -606,7 +624,7 @@ def _agent_node(state: AgentState) -> dict:
                 # Insert a helpful system note before the user message to guide the agent
                 context_msg = SystemMessage(
                     content=f"Note: The user mentioned a doctor named '{extracted_name}'. "
-                    f"Use this name directly with search_hcp to find their past meetings. "
+                    f"Use this name directly with search_hcp_history to find their past meetings. "
                     f"Do NOT ask the user for the doctor's name."
                 )
                 # Insert after the main system prompt

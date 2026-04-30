@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
 import { Send, User, Calendar, FileText, Loader } from 'lucide-react'
 import axios from 'axios'

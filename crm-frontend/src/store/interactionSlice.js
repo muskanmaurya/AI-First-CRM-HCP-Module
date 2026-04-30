@@ -79,6 +79,8 @@ const initialState = {
   currentSessionId: null,
   messages: [],
   loading: "idle",
+  formLoading: "idle",
+  chatLoading: "idle",
   formDraft: createEmptyFormDraft(),
   aiHighlightedFields: {},
 };
@@ -193,19 +195,6 @@ export const postChatMessage = createAsyncThunk(
     }
   },
 );
-
-const structuredResponse = action.payload.structured_response ?? null;
-// Robust extraction of the text to show in the bubble
-const assistant = 
-    (action.payload.response && String(action.payload.response).trim()) || 
-    (structuredResponse?.text && String(structuredResponse.text).trim()) || 
-    "I have processed your request."; // Ultimate fallback
-
-state.messages.push({
-    role: "assistant",
-    content: assistant, // This text will now definitely exist
-    structured_response: structuredResponse,
-});
 
 const interactionSlice = createSlice({
   name: "interactions",
@@ -344,7 +333,7 @@ const interactionSlice = createSlice({
               String(action.payload.response).trim()) ||
             (structuredResponse?.text &&
               String(structuredResponse.text).trim()) ||
-            "";
+            "I have processed your request.";
           state.messages.push({
             role: "user",
             content: action.meta.arg.message,

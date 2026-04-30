@@ -1,6 +1,6 @@
-import React, { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useDispatch, useSelector } from 'react-redux'
-import { fetchSessions, fetchSessionMessages, postChatMessage, setCurrentSession, clearCurrentSession, createSession } from '../store/interactionSlice'
+import { fetchSessions, fetchSessionMessages, setCurrentSession, clearCurrentSession, createSession } from '../store/interactionSlice'
 
 function Sidebar() {
     const dispatch = useDispatch()
