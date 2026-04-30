@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
+import re
+import uuid
 import logging
 import os
-import re
 import time
 from datetime import date, datetime
 from typing import Any, TypedDict
-from uuid import uuid4
 from dotenv import load_dotenv
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
@@ -21,10 +21,8 @@ from pydantic import BaseModel, Field
 
 from database import (
     create_interaction,
-    delete_interaction as db_delete_interaction,
     find_interactions_by_hcp,
-    get_recent_interactions,
-    get_recent_interactions_global,
+    get_recent_interactions as db_get_recent_interactions,
     get_session,
     serialize_interaction,
     update_interaction,
@@ -142,15 +140,15 @@ SYSTEM_PROMPT = (
     "You help manage Healthcare Professional interactions and have access to these tools:\n"
     "- log_interaction: Save new HCP meeting notes to database\n"
     "- edit_interaction: Update existing interaction by ID\n"
-    "- search_hcp_history: Find all past meetings with a specific Doctor (pass the doctor name directly if mentioned)\n"
-    "- list_all_interactions: Get the 10 most recent interactions\n"
-    "- delete_interaction: Remove an interaction from database\n\n"
+    "- search_hcp: Find past meetings with a specific Doctor (pass the doctor name directly if mentioned)\n"
+    "- get_recent_history: Retrieve the last 5 interactions for one doctor\n"
+    "- summarize_notes: Create a concise clinical summary from multiple notes\n\n"
     "IMPORTANT: If the user mentions a doctor's name (e.g., 'Dr. Sharma', 'Dr Verma', 'Dr. Alice Johnson'), "
-    "ALWAYS extract that name and use it directly with search_hcp_history. Do NOT ask the user for the name again. "
-    "The search_hcp_history tool requires the hcp_name parameter to be the full doctor name as mentioned.\n\n"
+    "ALWAYS extract that name and use it directly with search_hcp. Do NOT ask the user for the name again. "
+    "The search_hcp tool requires the hcp_name parameter to be the full doctor name as mentioned.\n\n"
     "When extracting or updating medical names/terms, use typo-resilient reasoning and correct obvious misspellings "
     "(for example, common medicine or doctor-name typos) before returning values.\n\n"
-    "When the user asks to log, edit, search, list, or delete interactions, use the appropriate tool immediately. "
+    "When the user asks to log, edit, search, review recent history, or summarize interactions, use the appropriate tool immediately. "
     "Keep responses concise, clinically aware, and operationally useful."
 )
 
@@ -454,7 +452,7 @@ def edit_interaction(
 
 
 @tool
-def search_hcp_history(hcp_name: str) -> dict:
+def search_hcp(hcp_name: str) -> dict:
     """
     Search the database for all past meetings with a specific Healthcare Professional.
     
@@ -479,7 +477,7 @@ def search_hcp_history(hcp_name: str) -> dict:
                 "results": _serialize_rows(rows),
             }
     except Exception as e:
-        logger.error(f"search_hcp_history error: {type(e).__name__}: {str(e)}")
+        logger.error(f"search_hcp error: {type(e).__name__}: {str(e)}")
         return {
             "status": "error",
             "hcp_name": hcp_name,
@@ -488,43 +486,100 @@ def search_hcp_history(hcp_name: str) -> dict:
 
 
 @tool
-def list_all_interactions() -> dict:
-    """Fetch the most recent 10 interactions from the database (across all HCPs)."""
+def get_recent_history(hcp_name: str) -> dict:
+    """Fetch exactly the last 5 interactions for a specific HCP."""
     try:
         with get_session() as session:
-            rows = get_recent_interactions_global(session, limit=10)
+            rows = db_get_recent_interactions(session, hcp_name, limit=5)
             return {
                 "status": "ok",
+                "hcp_name": hcp_name,
                 "count": len(rows),
                 "results": _serialize_rows(rows),
             }
     except Exception as e:
-        logger.error(f"list_all_interactions error: {type(e).__name__}: {str(e)}")
+        logger.error(f"get_recent_history error: {type(e).__name__}: {str(e)}")
         return {
             "status": "error",
+            "hcp_name": hcp_name,
             "error": f"Failed to fetch interactions: {str(e)[:100]}",
         }
 
 
 @tool
-def delete_interaction(interaction_id: int) -> dict:
-    """Remove an interaction from the database by ID (admin operation)."""
+def summarize_notes(hcp_name: str, limit: int = 5) -> dict:
+    """Generate a concise clinical summary from the most recent notes for an HCP."""
     try:
         with get_session() as session:
-            success = db_delete_interaction(session, interaction_id)
-            if not success:
-                return {"status": "not_found", "interaction_id": interaction_id}
-            return {"status": "deleted", "interaction_id": interaction_id}
+            rows = db_get_recent_interactions(session, hcp_name, limit=max(1, min(int(limit), 10)))
+            if not rows:
+                return {
+                    "status": "ok",
+                    "hcp_name": hcp_name,
+                    "count": 0,
+                    "summary": f"No prior interactions were found for {hcp_name}.",
+                }
+
+            note_lines = []
+            for index, row in enumerate(rows, start=1):
+                note = serialize_interaction(row)
+                note_lines.append(
+                    f"Note {index}: Date={note.get('interaction_date')} | Type={note.get('interaction_type')} | Summary={note.get('summary')}"
+                )
+
+            summary_prompt = (
+                "You are a medical CRM summarization assistant. "
+                "Write a concise executive summary of the doctor relationship using only the provided notes. "
+                "Highlight recurring themes, treatment context, sentiment, and follow-up implications. "
+                "Keep the summary clear, neutral, and clinically appropriate.\n\n"
+                f"HCP: {hcp_name}\n"
+                f"Notes:\n{chr(10).join(note_lines)}"
+            )
+
+            try:
+                summary_llm = ChatGroq(
+                    model="mixtral-8x7b-32768",
+                    temperature=0,
+                    api_key=GROQ_API_KEY,
+                    max_retries=0,
+                )
+                summary_response = _invoke_with_retry(summary_llm, summary_prompt)
+                summary_text = _to_text(getattr(summary_response, "content", summary_response)).strip()
+            except Exception as e:
+                logger.warning(f"summarize_notes LLM fallback: {type(e).__name__}: {str(e)[:80]}")
+                summary_text = " ".join(
+                    filter(
+                        None,
+                        [
+                            f"Recent interaction themes for {hcp_name}:",
+                            "; ".join(
+                                str(serialize_interaction(row).get("summary") or "").strip()
+                                for row in rows
+                            ).strip("; "),
+                        ],
+                    )
+                ).strip()
+
+            return {
+                "status": "ok",
+                "hcp_name": hcp_name,
+                "count": len(rows),
+                "summary": summary_text,
+                "notes": _serialize_rows(rows),
+            }
     except Exception as e:
-        logger.error(f"delete_interaction error: {type(e).__name__}: {str(e)}")
+        logger.error(f"summarize_notes error: {type(e).__name__}: {str(e)}")
         return {
             "status": "error",
-            "interaction_id": interaction_id,
-            "error": f"Failed to delete interaction: {str(e)[:100]}",
+            "hcp_name": hcp_name,
+            "error": f"Failed to summarize notes: {str(e)[:100]}",
         }
 
 
-TOOLS = [log_interaction, edit_interaction, search_hcp_history, list_all_interactions, delete_interaction]
+search_hcp_history = search_hcp
+
+
+TOOLS = [log_interaction, edit_interaction, search_hcp, get_recent_history, summarize_notes]
 TOOL_MAP = {tool_object.name: tool_object for tool_object in TOOLS}
 
 
@@ -551,7 +606,7 @@ def _agent_node(state: AgentState) -> dict:
                 # Insert a helpful system note before the user message to guide the agent
                 context_msg = SystemMessage(
                     content=f"Note: The user mentioned a doctor named '{extracted_name}'. "
-                    f"Use this name directly with search_hcp_history to find their past meetings. "
+                    f"Use this name directly with search_hcp to find their past meetings. "
                     f"Do NOT ask the user for the doctor's name."
                 )
                 # Insert after the main system prompt
@@ -685,7 +740,7 @@ def run_chat(message: str, session_id: str | None = None) -> dict:
     Returns:
         JSON dict with session_id, response, tool_actions, status
     """
-    thread_id = session_id or uuid4().hex
+    thread_id = session_id or uuid.uuid4().hex
     
     # Input validation
     if not message or not isinstance(message, str):
@@ -778,7 +833,7 @@ def self_test_run_chat() -> dict:
     def timeout_handler(signum, frame):
         raise TimeoutError("run_chat took longer than 10 seconds")
     
-    test_session = f"test_{uuid4().hex[:8]}"
+    test_session = f"test_{uuid.uuid4().hex[:8]}"
     start_time = time_module.time()
     
     try:

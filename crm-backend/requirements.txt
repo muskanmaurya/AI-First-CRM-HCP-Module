@@ -7,4 +7,5 @@ langchain-groq==0.1.0
 langgraph==0.0.20
 sqlalchemy==2.0.23
 psycopg2-binary==2.9.6
+psycopg[binary]
 groq==0.4.2
