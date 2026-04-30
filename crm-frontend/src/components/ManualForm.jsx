@@ -205,12 +205,18 @@ const ManualForm = () => {
     };
   }, [aiHighlightedFields, dispatch]);
 
+  // const fieldClass = (field, baseClass) => {
+  //   if (!aiHighlightedFields[field]) return baseClass;
+  //   return `${baseClass} border-blue-400 ring-2 ring-blue-200 transition-all duration-500`;
+  // };
+
   const fieldClass = (field, baseClass) => {
+    // If this field was recently updated by AI, add the blue ring
     if (!aiHighlightedFields[field]) return baseClass;
     return `${baseClass} border-blue-400 ring-2 ring-blue-200 transition-all duration-500`;
-  };
+};
 
-  const startResizing = () => {
+  const startResizing = () => {-
     if (!isDesktop) return;
     isDraggingRef.current = true;
     document.body.style.cursor = "col-resize";
@@ -341,28 +347,21 @@ const ManualForm = () => {
               </div>
             ) : (
               <div className="space-y-4">
-                {/* {messages.map((message, index) => (
-								<div key={`${message.role}-${index}`} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-									<div className={`max-w-xl rounded-2xl border px-4 py-3 text-sm leading-relaxed shadow-sm ${message.role === 'user' ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 bg-slate-50 text-slate-800'}`}>
-										{message.content}
-										{message.structured_response?.form_updates && (
-											<div className="mt-2 inline-block rounded-full bg-blue-50 border border-blue-100 px-2 py-1 text-xs text-blue-600">AI pre-filled form</div>
-										)}
-									</div>
-								</div>
-							))} */}
-                {messages.map((msg, idx) => (
-                  <div
-                    key={idx}
-                    className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-                  >
-                    <div
-                      className={`max-w-xl rounded-2xl px-4 py-3 ${msg.role === "user" ? "bg-blue-600 text-white" : "bg-slate-50"}`}
-                    >
-                      {msg.content}
-                    </div>
-                  </div>
-                ))}
+                {messages.map((message, index) => (
+  <div key={`${message.role}-${index}`} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+    <div className={`max-w-xl rounded-2xl border px-4 py-3 text-sm leading-relaxed shadow-sm ${
+      message.role === 'user' ? 'border-blue-600 bg-blue-600 text-white' : 'border-slate-200 bg-slate-50 text-slate-800'
+    }`}>
+      {message.content}
+      {/* This part is CRITICAL for the "Extraction" feedback */}
+      {message.role === 'assistant' && message.structured_response?.form_updates && (
+        <div className="mt-2 inline-block rounded-full bg-blue-50 border border-blue-100 px-2 py-1 text-xs text-blue-600 font-medium">
+          ✨ AI auto-filled form details
+        </div>
+      )}
+    </div>
+  </div>
+))}
                 {chatLoading && (
                   <div className="flex justify-start">
                     <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 shadow-sm">

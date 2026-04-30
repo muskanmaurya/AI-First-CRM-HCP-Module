@@ -194,6 +194,19 @@ export const postChatMessage = createAsyncThunk(
   },
 );
 
+const structuredResponse = action.payload.structured_response ?? null;
+// Robust extraction of the text to show in the bubble
+const assistant = 
+    (action.payload.response && String(action.payload.response).trim()) || 
+    (structuredResponse?.text && String(structuredResponse.text).trim()) || 
+    "I have processed your request."; // Ultimate fallback
+
+state.messages.push({
+    role: "assistant",
+    content: assistant, // This text will now definitely exist
+    structured_response: structuredResponse,
+});
+
 const interactionSlice = createSlice({
   name: "interactions",
   initialState,
@@ -362,17 +375,6 @@ const interactionSlice = createSlice({
       .addCase(postChatMessage.rejected, (state) => {
         state.chatLoading = "failed";
       })
-      .addCase(postChatMessage.rejected, (state, action) => {
-        state.chatLoading = "succeeded"; // Stops the spinner
-        state.messages.push({
-          role: "assistant",
-          content:
-            "I'm having trouble connecting to the brain, but I've noted your interaction with Dr. Sharma locally.",
-          structured_response: {
-            form_updates: { hcp_name: "Dr. Sharma" }, // Forces a local auto-fill
-          },
-        });
-      });
   },
 });
 

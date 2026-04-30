@@ -11,7 +11,7 @@ const AppStatePatchBridge = () => {
 
   useEffect(() => {
     if (!messages?.length) return;
-
+    console.log("🚀 Senior Dev: Auto-filling form");
     // Look for the most recent message from the assistant
     const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
     
