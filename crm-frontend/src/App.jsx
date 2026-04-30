@@ -34,7 +34,7 @@ const AppStatePatchBridge = () => {
 const App = () => {
   return (
     <Provider store={store}>
-      <div className="h-dvh w-screen overflow-hidden bg-gray-50">
+      <div className="fixed inset-0 overflow-hidden bg-gray-50">
         <AppStatePatchBridge />
         <ManualForm />
       </div>

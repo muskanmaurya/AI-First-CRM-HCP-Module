@@ -120,13 +120,16 @@ const ChipListEditor = ({
 
 const ManualForm = () => {
   const dispatch = useDispatch();
-  const { loading, messages, currentSessionId, interactions } = useSelector(
-    (state) => state.interactions,
-  );
+  const { 
+    loading, 
+    messages, 
+    currentSessionId, 
+    interactions, 
+    chatLoading 
+} = useSelector((state) => state.interactions);
   const formDraft = useSelector(selectFormDraft);
   const aiHighlightedFields = useSelector(selectAiHighlightedFields);
   const [chatInput, setChatInput] = useState("");
-  const [chatLoading, setChatLoading] = useState(false);
   const [chatError, setChatError] = useState("");
   const [formError, setFormError] = useState("");
   const [formSuccess, setFormSuccess] = useState(false);
@@ -141,9 +144,6 @@ const ManualForm = () => {
   const highlightTimeoutsRef = useRef({});
   const splitContainerRef = useRef(null);
   const isDraggingRef = useRef(false);
-
-  const { messages, chatLoading } = useSelector((state) => state.interactions);
-
   const hcpOptions = useMemo(() => {
     const names = new Set();
     interactions.forEach((interaction) => {
@@ -220,7 +220,7 @@ const ManualForm = () => {
   const handleChatSend = async () => {
     if (!chatInput.trim()) return;
     setChatError("");
-    setChatLoading(true);
+    
     try {
       await dispatch(
         postChatMessage({
@@ -231,8 +231,6 @@ const ManualForm = () => {
       setChatInput("");
     } catch (error) {
       setChatError(error || "Unable to send message right now.");
-    } finally {
-      setChatLoading(false);
     }
   };
 
@@ -573,11 +571,10 @@ const ManualForm = () => {
                     </div>
 
                     <div
-                      className={
-                        aiHighlightedFields.attendees
-                          ? "space-y-2 rounded-2xl border border-blue-400 p-2 ring-2 ring-blue-200 transition-all duration-500"
-                          : "space-y-2"
-                      }
+                      className={fieldClass(
+                        "attendees",
+                        "space-y-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm",
+                      )}
                     >
                       <label className="text-sm font-medium tracking-tight text-slate-700">
                         Attendees
@@ -609,11 +606,10 @@ const ManualForm = () => {
 
                   <div className="grid gap-5">
                     <div
-                      className={
-                        aiHighlightedFields.materialsShared
-                          ? "rounded-2xl border border-blue-400 p-2 ring-2 ring-blue-200 transition-all duration-500"
-                          : ""
-                      }
+                      className={fieldClass(
+                        "materialsShared",
+                        "rounded-2xl border border-slate-200 bg-white p-2 shadow-sm",
+                      )}
                     >
                       <ChipListEditor
                         label="Materials Shared"
@@ -636,11 +632,10 @@ const ManualForm = () => {
                     </div>
 
                     <div
-                      className={
-                        aiHighlightedFields.samplesDistributed
-                          ? "rounded-2xl border border-blue-400 p-2 ring-2 ring-blue-200 transition-all duration-500"
-                          : ""
-                      }
+                      className={fieldClass(
+                        "samplesDistributed",
+                        "rounded-2xl border border-slate-200 bg-white p-2 shadow-sm",
+                      )}
                     >
                       <ChipListEditor
                         label="Samples Distributed"
@@ -672,11 +667,10 @@ const ManualForm = () => {
 
                   <div className="space-y-5">
                     <div
-                      className={
-                        aiHighlightedFields.hcpSentiment
-                          ? "rounded-2xl border border-blue-400 p-2 ring-2 ring-blue-200 transition-all duration-500"
-                          : ""
-                      }
+                      className={fieldClass(
+                        "hcpSentiment",
+                        "rounded-2xl border border-slate-200 bg-white p-2 shadow-sm",
+                      )}
                     >
                       <p className="mb-3 text-sm font-medium tracking-tight text-slate-700">
                         HCP Sentiment
