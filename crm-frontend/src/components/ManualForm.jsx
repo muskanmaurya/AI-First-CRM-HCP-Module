@@ -163,6 +163,31 @@ const ManualForm = () => {
     return () => window.removeEventListener("resize", handleResize);
   }, []);
 
+  // useEffect(() => {
+  //   if (!isDesktop) return;
+
+  //   const handleMouseMove = (event) => {
+  //     if (!isDraggingRef.current || !splitContainerRef.current) return;
+  //     const bounds = splitContainerRef.current.getBoundingClientRect();
+  //     const next = ((event.clientX - bounds.left) / bounds.width) * 100;
+  //     setSplitRatio(Math.max(30, Math.min(70, next)));
+  //   };
+
+  //   const handleMouseUp = () => {
+  //     isDraggingRef.current = false;
+  //     document.body.style.cursor = "";
+  //     document.body.style.userSelect = "";
+  //   };
+
+  //   window.addEventListener("mousemove", handleMouseMove);
+  //   window.addEventListener("mouseup", handleMouseUp);
+
+  //   return () => {
+  //     window.removeEventListener("mousemove", handleMouseMove);
+  //     window.removeEventListener("mouseup", handleMouseUp);
+  //   };
+  // }, [isDesktop]);
+
   useEffect(() => {
     if (!isDesktop) return;
 
@@ -216,7 +241,7 @@ const ManualForm = () => {
     return `${baseClass} border-blue-400 ring-2 ring-blue-200 transition-all duration-500`;
 };
 
-  const startResizing = () => {-
+  const startResizing = () => {
     if (!isDesktop) return;
     isDraggingRef.current = true;
     document.body.style.cursor = "col-resize";
