@@ -1,8 +1,26 @@
 import { createAsyncThunk, createSlice } from "@reduxjs/toolkit";
 import axios from "axios";
 
-const API_BASE_URL = "https://ai-first-crm-hcp-module-hw8f.onrender.com";
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL?.trim() || "https://ai-first-crm-hcp-module-hw8f.onrender.com").replace(/\/$/, "");
 const todayIso = () => new Date().toISOString().split("T")[0];
+
+const getRequestErrorMessage = (error, fallbackMessage) => {
+  const detail = error?.response?.data?.detail;
+  if (typeof detail === "string" && detail.trim()) {
+    return detail;
+  }
+
+  const status = error?.response?.status;
+  if (status) {
+    return `Request failed with status ${status}`;
+  }
+
+  if (error?.message) {
+    return error.message;
+  }
+
+  return fallbackMessage;
+};
 
 const createEmptyFormDraft = () => ({
   hcpName: "",
@@ -95,11 +113,7 @@ export const fetchInteractions = createAsyncThunk(
 
       return data.records ?? [];
     } catch (error) {
-      return rejectWithValue(
-        error?.response?.data?.detail ??
-          error.message ??
-          "Failed to fetch interactions",
-      );
+      return rejectWithValue(getRequestErrorMessage(error, "Failed to fetch interactions"));
     }
   },
 );
@@ -115,11 +129,7 @@ export const addInteraction = createAsyncThunk(
 
       return data.interaction;
     } catch (error) {
-      return rejectWithValue(
-        error?.response?.data?.detail ??
-          error.message ??
-          "Failed to add interaction",
-      );
+      return rejectWithValue(getRequestErrorMessage(error, "Failed to add interaction"));
     }
   },
 );
@@ -131,11 +141,7 @@ export const fetchSessions = createAsyncThunk(
       const { data } = await axios.get(`${API_BASE_URL}/sessions`);
       return data.sessions ?? [];
     } catch (err) {
-      return rejectWithValue(
-        err?.response?.data?.detail ??
-          err.message ??
-          "Failed to fetch sessions",
-      );
+      return rejectWithValue(getRequestErrorMessage(err, "Failed to fetch sessions"));
     }
   },
 );
@@ -150,11 +156,7 @@ export const createSession = createAsyncThunk(
       });
       return data;
     } catch (err) {
-      return rejectWithValue(
-        err?.response?.data?.detail ??
-          err.message ??
-          "Failed to create session",
-      );
+      return rejectWithValue(getRequestErrorMessage(err, "Failed to create session"));
     }
   },
 );
@@ -168,11 +170,7 @@ export const fetchSessionMessages = createAsyncThunk(
       );
       return { sessionId, messages: data.messages ?? [] };
     } catch (err) {
-      return rejectWithValue(
-        err?.response?.data?.detail ??
-          err.message ??
-          "Failed to fetch messages",
-      );
+      return rejectWithValue(getRequestErrorMessage(err, "Failed to fetch messages"));
     }
   },
 );
@@ -187,11 +185,7 @@ export const postChatMessage = createAsyncThunk(
       });
       return data;
     } catch (err) {
-      return rejectWithValue(
-        err?.response?.data?.detail ??
-          err.message ??
-          "Failed to post chat message",
-      );
+      return rejectWithValue(getRequestErrorMessage(err, "Failed to post chat message"));
     }
   },
 );
@@ -328,21 +322,27 @@ const interactionSlice = createSlice({
           state.currentSessionId = sessionId;
           // Prefer explicit response text; fallback to structured_response.text
           const structuredResponse = action.payload.structured_response ?? null;
-          const assistant =
-            (action.payload.response &&
-              String(action.payload.response).trim()) ||
-            (structuredResponse?.text &&
-              String(structuredResponse.text).trim()) ||
-            "I have processed your request.";
-          state.messages.push({
-            role: "user",
-            content: action.meta.arg.message,
-          });
-          state.messages.push({
-            role: "assistant",
-            content: assistant,
-            structured_response: structuredResponse,
-          });
+
+          // Robust assistant extraction: handle string, object, or nested structured_response
+          let assistantRaw = null;
+          if (action.payload && typeof action.payload.response !== "undefined") {
+            assistantRaw = action.payload.response;
+          } else if (structuredResponse && typeof structuredResponse.text !== "undefined") {
+            assistantRaw = structuredResponse.text;
+          } else if (action.payload && typeof action.payload === "object") {
+            // Some backends may return the assistant as nested object
+            assistantRaw = action.payload?.response_text ?? action.payload?.text ?? null;
+          }
+
+          let assistant = "I have processed your request.";
+          if (assistantRaw && typeof assistantRaw === "object") {
+            assistant = (assistantRaw.text ?? assistantRaw.response ?? JSON.stringify(assistantRaw)).toString();
+          } else if (assistantRaw) {
+            assistant = String(assistantRaw).trim();
+          }
+
+          state.messages.push({ role: "user", content: action.meta.arg.message });
+          state.messages.push({ role: "assistant", content: assistant, structured_response: structuredResponse });
 
           // Apply structured form updates immediately to local draft (so UI updates even if chat rendering fails)
           if (
@@ -383,5 +383,9 @@ export const {
 export const selectFormDraft = (state) => state.interactions.formDraft;
 export const selectAiHighlightedFields = (state) =>
   state.interactions.aiHighlightedFields;
+
+// Export helpers for external consumers (App bridge) so the bridge can
+// normalize snake_case updates into the frontend's camelCase formDraft keys
+export { formFieldMap, normalizeIncomingAiUpdates };
 
 export default interactionSlice.reducer;

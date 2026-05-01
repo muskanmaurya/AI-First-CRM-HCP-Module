@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { Provider, useDispatch, useSelector } from 'react-redux'
-import { applyAiFormUpdates } from './store/interactionSlice'
+import { applyAiFormUpdates, normalizeIncomingAiUpdates } from './store/interactionSlice'
 import { store } from './store/store'
 import ManualForm from './components/ManualForm'
 
@@ -11,20 +11,23 @@ const AppStatePatchBridge = () => {
 
   useEffect(() => {
     if (!messages?.length) return;
-    console.log("🚀 Senior Dev: Auto-filling form");
-    // Look for the most recent message from the assistant
-    const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant');
-    
-    if (!lastAssistant?.structured_response?.form_updates) return;
+    // Look for the most recent assistant message that contains form updates
+    const lastAssistant = [...messages]
+      .reverse()
+      .find((m) => m.role === 'assistant' && m.structured_response && m.structured_response.form_updates && Object.keys(m.structured_response.form_updates).length > 0);
 
-    const updates = lastAssistant.structured_response.form_updates;
-    const signature = JSON.stringify(updates);
+    if (!lastAssistant) return;
 
-    // Prevent infinite loops: only dispatch if the data is NEW
+    const rawUpdates = lastAssistant.structured_response.form_updates || {};
+    const signature = JSON.stringify(rawUpdates);
+
+    // Prevent infinite loops: only dispatch if the data is NEW and non-empty
     if (signature === '{}' || signature === lastAppliedRef.current) return;
 
-    console.log("🚀 Senior Dev: Auto-filling form with:", updates);
-    dispatch(applyAiFormUpdates(updates));
+    // Normalize snake_case -> camelCase at bridge-level for clarity
+    const normalized = normalizeIncomingAiUpdates(rawUpdates);
+
+    dispatch(applyAiFormUpdates(normalized));
     lastAppliedRef.current = signature;
   }, [messages, dispatch]);
 

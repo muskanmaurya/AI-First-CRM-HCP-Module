@@ -4,6 +4,10 @@ import { Send, User, Calendar, FileText, Loader } from 'lucide-react'
 import axios from 'axios'
 import { addInteraction } from '../store/interactionSlice'
 
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL?.trim() ||
+  'http://localhost:8000'
+
 const LogInteractionScreen = () => {
   const dispatch = useDispatch()
   const { loading } = useSelector((state) => state.interactions)
@@ -42,7 +46,7 @@ const LogInteractionScreen = () => {
     setChatLoading(true)
 
     try {
-      const response = await axios.post('https://ai-first-crm-hcp-module-hw8f.onrender.com/chat', {
+      const response = await axios.post(`${API_BASE_URL}/chat`, {
         message: chatInput,
         session_id: 'default_session',
       })
