@@ -41,7 +41,9 @@ def _get_cors_origins() -> list[str]:
         "http://localhost:5173",
         "http://localhost:10000", # Add this based on your logs
         "http://127.0.0.1:5173",
-        "https://ai-first-crm-hcp-module-1.onrender.com",
+        # Explicitly allow the primary Render frontend and a likely Vercel hostname
+        "https://ai-first-crm-hcp-module-hw8f.onrender.com",
+        "https://ai-first-crm-hcp-module-hw8f.vercel.app",
     ]
 
     if env_origins:
@@ -52,7 +54,18 @@ def _get_cors_origins() -> list[str]:
         vercel_origin = vercel_url if vercel_url.startswith("http") else f"https://{vercel_url}"
         origins.append(vercel_origin)
 
-    return list(dict.fromkeys(origins))
+    # Normalize origins: strip trailing slashes and deduplicate while preserving order
+    cleaned = []
+    for o in origins:
+        if not o:
+            continue
+        o = o.strip()
+        # remove trailing slash if present
+        if o.endswith("/"):
+            o = o[:-1]
+        if o and o not in cleaned:
+            cleaned.append(o)
+    return cleaned
 
 
 @asynccontextmanager
@@ -78,9 +91,8 @@ FRONTEND_DIST_DIR = Path(__file__).resolve().parent.parent / "crm-frontend" / "d
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_get_cors_origins(),
-    allow_origin_regex=r"https://.*\.vercel\.app|http://localhost(:\d+)?|http://127\.0\.0\.1(:\d+)?",
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
     allow_headers=["*"],
 )
 
@@ -168,38 +180,44 @@ def _build_summary(payload: InteractionCreate, interaction_date: date) -> str:
 def chat(payload: ChatRequest) -> dict[str, Any]:
     # ensure session exists (create when missing)
     session_id = payload.session_id
-    with get_session() as db:
-        if not session_id:
-            # create a new session with a generic title
+    if not session_id:
+        # create a new session with a generic title
+        session_id = uuid.uuid4().hex
 
-            session_id = uuid.uuid4().hex
-            # generate a better title from the first user message
-            def _generate_title_from_message(msg: str) -> str:
+    def _generate_title_from_message(msg: str) -> str:
+        # Try to find patterns like 'Dr. Name' or 'Doctor Name'
+        m = re.search(r"(?:Dr\.?|Doctor)\s+([A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+)*)", msg)
+        if m:
+            name = m.group(1).strip()
+            return f"Meeting with Dr. {name}"
 
-                # Try to find patterns like 'Dr. Name' or 'Doctor Name'
-                m = re.search(r"(?:Dr\.?|Doctor)\s+([A-Z][A-Za-z.'\-]+(?:\s+[A-Z][A-Za-z.'\-]+)*)", msg)
-                if m:
-                    name = m.group(1).strip()
-                    return f"Meeting with Dr. {name}"
+        # fallback: first 5 words
+        words = msg.strip().split()
+        title = " ".join(words[:5])
+        return f"Chat: {title}" if title else f"Chat {session_id[:8]}"
 
-                # fallback: first 5 words
-                words = msg.strip().split()
-                title = " ".join(words[:5])
-                return f"Chat: {title}" if title else f"Chat {session_id[:8]}"
+    try:
+        with get_session() as db:
+            if not payload.session_id:
+                title = _generate_title_from_message(payload.message or "")
+                create_chat_session(db, session_id=session_id, title=title)
 
-            title = _generate_title_from_message(payload.message or "")
-            create_chat_session(db, session_id=session_id, title=title)
-
-        # save user message
-        create_chat_message(db, session_id=session_id, role="user", content=payload.message)
+            # save user message
+            create_chat_message(db, session_id=session_id, role="user", content=payload.message)
+    except Exception:
+        # Chat should still work even if session persistence is temporarily unavailable.
+        logger.exception("Failed to persist incoming chat message for session %s", session_id)
 
     # call the agent
     result = run_chat(payload.message, session_id)
 
     # save assistant response
     assistant_text = result.get("response", "")
-    with get_session() as db:
-        create_chat_message(db, session_id=session_id, role="assistant", content=assistant_text)
+    try:
+        with get_session() as db:
+            create_chat_message(db, session_id=session_id, role="assistant", content=assistant_text)
+    except Exception:
+        logger.exception("Failed to persist assistant chat message for session %s", session_id)
 
     return {"session_id": session_id, **result}
 

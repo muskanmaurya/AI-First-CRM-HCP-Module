@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import json
+import re
+import uuid
 import logging
 import os
-import re
 import time
-import uuid
 from datetime import date, datetime
 from typing import Any, TypedDict
 from dotenv import load_dotenv
@@ -596,8 +596,23 @@ search_hcp = search_hcp_history
 get_recent_history = get_recent_interactions
 summarize_notes = summarize_interactions
 
+# Expose the exact tool names expected by external orchestrators / prompts.
+@tool("search_hcp")
+def _tool_search_hcp(hcp_name: str) -> dict:
+    return search_hcp_history(hcp_name)
 
-TOOLS = [log_interaction, edit_interaction, search_hcp_history, get_recent_interactions, summarize_interactions]
+
+@tool("get_recent_history")
+def _tool_get_recent_history(hcp_name: str) -> dict:
+    return get_recent_interactions(hcp_name)
+
+
+@tool("summarize_notes")
+def _tool_summarize_notes(hcp_name: str, limit: int = 5) -> dict:
+    return summarize_interactions(hcp_name, limit)
+
+
+TOOLS = [log_interaction, edit_interaction, _tool_search_hcp, _tool_get_recent_history, _tool_summarize_notes]
 TOOL_MAP = {tool_object.name: tool_object for tool_object in TOOLS}
 
 

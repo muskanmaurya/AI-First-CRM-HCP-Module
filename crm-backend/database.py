@@ -27,17 +27,17 @@ if not DATABASE_URL:
     DATABASE_URL = f"sqlite:///./dev.db"
 else:
     # Normalize common Postgres URL forms to the SQLAlchemy dialect that
-    # uses psycopg (psycopg3) so SQLAlchemy will import the correct DBAPI.
+    # matches our installed DBAPI driver.
     # Examples:
-    #  - postgres://...        -> postgresql+psycopg://...
-    #  - postgresql://...      -> postgresql+psycopg://...
+    #  - postgres://...        -> postgresql+psycopg2://...
+    #  - postgresql://...      -> postgresql+psycopg2://...
     # If the URL already specifies a dialect like postgresql+psycopg2://,
     # leave it as-is.
     if DATABASE_URL.startswith("postgres://"):
-        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg://", 1)
+        DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+psycopg2://", 1)
     elif DATABASE_URL.startswith("postgresql://") and not DATABASE_URL.startswith("postgresql+"):
-        DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg://", 1)
-    if DATABASE_URL.startswith("postgresql+psycopg://") and "sslmode=" not in DATABASE_URL:
+        DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+    if DATABASE_URL.startswith("postgresql+psycopg2://") and "sslmode=" not in DATABASE_URL:
         parts = urlsplit(DATABASE_URL)
         query_params = dict(parse_qsl(parts.query, keep_blank_values=True))
         query_params["sslmode"] = "require"
